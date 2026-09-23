@@ -1,0 +1,131 @@
+import { Sequelize, DataTypes, Model, Optional } from 'sequelize';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const sequelize = new Sequelize({
+  dialect: 'sqlite',
+  storage: './database.sqlite',
+  logging: false,
+});
+
+export class Participant extends Model {
+  declare id: string; // Coded identifier
+  declare ageGroup: string;
+  declare location: string;
+  declare educationStatus: string;
+  declare gender: string;
+  declare createdAt: Date;
+}
+Participant.init({
+  id: { type: DataTypes.STRING, primaryKey: true },
+  ageGroup: DataTypes.STRING,
+  location: DataTypes.STRING,
+  educationStatus: DataTypes.STRING,
+  gender: DataTypes.STRING,
+}, { sequelize, modelName: 'participant' });
+
+export class Consent extends Model {}
+Consent.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  participantId: { type: DataTypes.STRING, allowNull: false },
+  consentedAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+  guardianConsent: { type: DataTypes.BOOLEAN, defaultValue: false }, // For minors
+}, { sequelize, modelName: 'consent' });
+
+export class Module extends Model {
+  declare id: string;
+  declare order: number;
+  declare title: string;
+  declare description: string;
+}
+Module.init({
+  id: { type: DataTypes.STRING, primaryKey: true },
+  order: DataTypes.INTEGER,
+  title: DataTypes.STRING,
+  description: DataTypes.TEXT,
+}, { sequelize, modelName: 'module' });
+
+export class Lesson extends Model {}
+Lesson.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  moduleId: { type: DataTypes.STRING, allowNull: false },
+  order: DataTypes.INTEGER,
+  title: DataTypes.STRING,
+  content: DataTypes.TEXT, // Placeholder for rich content or JSON
+}, { sequelize, modelName: 'lesson' });
+
+export class ModuleProgress extends Model {
+  declare id: string;
+  declare participantId: string;
+  declare moduleId: string;
+  declare completedLessons: number;
+  declare completed: boolean;
+  declare lastAccessed: Date;
+}
+ModuleProgress.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  participantId: { type: DataTypes.STRING, allowNull: false },
+  moduleId: { type: DataTypes.STRING, allowNull: false },
+  completedLessons: { type: DataTypes.INTEGER, defaultValue: 0 },
+  completed: { type: DataTypes.BOOLEAN, defaultValue: false },
+  lastAccessed: DataTypes.DATE,
+}, { sequelize, modelName: 'module_progress' });
+
+export class Assessment extends Model {}
+Assessment.init({
+  id: { type: DataTypes.STRING, primaryKey: true },
+  type: DataTypes.ENUM('baseline', 'endline', 'sus'),
+}, { sequelize, modelName: 'assessment' });
+
+export class Question extends Model {}
+Question.init({
+  id: { type: DataTypes.STRING, primaryKey: true },
+  assessmentId: { type: DataTypes.STRING },
+  type: DataTypes.STRING, // adaptation, justice, efficacy, sus
+  text: DataTypes.TEXT,
+  options: DataTypes.JSONB,
+}, { sequelize, modelName: 'question' });
+
+export class AssessmentResponse extends Model {
+  declare id: string;
+  declare participantId: string;
+  declare questionId: string;
+  declare answer: string;
+}
+AssessmentResponse.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  participantId: { type: DataTypes.STRING, allowNull: false },
+  questionId: { type: DataTypes.STRING, allowNull: false },
+  answer: DataTypes.STRING,
+}, { sequelize, modelName: 'assessment_response' });
+
+export class SyncRecord extends Model {
+  declare id: string;
+  declare participantId: string;
+  declare clientEventId: string;
+  declare entityType: string;
+  declare entityData: any;
+  declare status: string;
+}
+SyncRecord.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  participantId: { type: DataTypes.STRING, allowNull: false },
+  clientEventId: { type: DataTypes.STRING, unique: true }, // Idempotency
+  entityType: DataTypes.STRING,
+  entityData: DataTypes.JSONB,
+  status: DataTypes.STRING, // 'pending', 'processed', 'failed'
+}, { sequelize, modelName: 'sync_record' });
+
+// Associations
+Participant.hasMany(Consent, { foreignKey: 'participantId', constraints: false });
+Participant.hasMany(ModuleProgress, { foreignKey: 'participantId', constraints: false });
+Module.hasMany(Lesson, { foreignKey: 'moduleId', constraints: false });
+Module.hasMany(ModuleProgress, { foreignKey: 'moduleId', constraints: false });
+Assessment.hasMany(Question, { foreignKey: 'assessmentId', constraints: false });
+Participant.hasMany(AssessmentResponse, { foreignKey: 'participantId', constraints: false });
+Question.hasMany(AssessmentResponse, { foreignKey: 'questionId', constraints: false });
+
+export const setupDb = async () => {
+  await sequelize.sync({ alter: true });
+};
