@@ -74,12 +74,9 @@ npm run dev
 
 **UI/UX Design**: 
 The application utilizes an **"Organic Biophilic"** design theme. Recognizing the context of climate justice and environmental adaptation, the interface is built around natural aesthetics.
-- **Figma Mockups & Flow**: (Please link your Figma files here)
+- **Demo Video**: (https://drive.google.com/drive/folders/1OeKeE8YBquxES4TENzt6P05bivu1P63s?usp=sharing)
 - **Screenshots**: Below is a demonstration of the live UI transitions between the educational modules and the dynamic interactive quiz states:
-  ![Animation and UI Test Recording](file:///C:/Users/LENOVO/Downloads/John%20Obure%20Project/animation_test.webp)
-
-**Hardware Integration (Circuit Diagrams)**: 
-*Note: As this is a pure software-based Progressive Web App (PWA) with a Node.js backend, there are no hardware circuit diagrams associated with this project.*
+  ![Animation and UI Test Recording](https://github.com/obure1always/Nairobi-Climate-Justice/blob/main/animation_test.webp)
 
 ---
 
