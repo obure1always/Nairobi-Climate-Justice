@@ -5,7 +5,7 @@ dotenv.config();
 
 export const sequelize = new Sequelize({
   dialect: 'sqlite',
-  storage: './database.sqlite',
+  storage: process.env.NODE_ENV === 'test' ? ':memory:' : './database.sqlite',
   logging: false,
 });
 
@@ -117,6 +117,50 @@ SyncRecord.init({
   status: DataTypes.STRING, // 'pending', 'processed', 'failed'
 }, { sequelize, modelName: 'sync_record' });
 
+export class User extends Model {
+  declare id: string;
+  declare email: string | null;
+  declare passwordHash: string | null;
+  declare passwordSalt: string | null;
+  declare recoveryCodeHash: string | null;
+  declare recoveryCodeSalt: string | null;
+  declare authProvider: 'email' | 'google';
+  declare googleSubjectId: string | null;
+  declare role: 'learner' | 'researcher' | 'admin';
+  declare name: string | null;
+  declare avatarUrl: string | null;
+  declare participantId: string | null;
+  declare createdAt: Date;
+  declare updatedAt: Date;
+}
+User.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  email: { type: DataTypes.STRING, unique: true, allowNull: true },
+  passwordHash: { type: DataTypes.STRING, allowNull: true },
+  passwordSalt: { type: DataTypes.STRING, allowNull: true },
+  recoveryCodeHash: { type: DataTypes.STRING, allowNull: true },
+  recoveryCodeSalt: { type: DataTypes.STRING, allowNull: true },
+  authProvider: { type: DataTypes.STRING, defaultValue: 'email' },
+  googleSubjectId: { type: DataTypes.STRING, unique: true, allowNull: true },
+  role: { type: DataTypes.STRING, defaultValue: 'learner' },
+  name: { type: DataTypes.STRING, allowNull: true },
+  avatarUrl: { type: DataTypes.STRING, allowNull: true },
+  participantId: { type: DataTypes.STRING, allowNull: true },
+}, { sequelize, modelName: 'user' });
+
+export class UserSession extends Model {
+  declare token: string;
+  declare userId: string;
+  declare expiresAt: Date;
+  declare lastActive: Date;
+}
+UserSession.init({
+  token: { type: DataTypes.STRING, primaryKey: true },
+  userId: { type: DataTypes.STRING, allowNull: false },
+  expiresAt: { type: DataTypes.DATE, allowNull: false },
+  lastActive: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+}, { sequelize, modelName: 'user_session' });
+
 // Associations
 Participant.hasMany(Consent, { foreignKey: 'participantId', constraints: false });
 Participant.hasMany(ModuleProgress, { foreignKey: 'participantId', constraints: false });
@@ -125,7 +169,9 @@ Module.hasMany(ModuleProgress, { foreignKey: 'moduleId', constraints: false });
 Assessment.hasMany(Question, { foreignKey: 'assessmentId', constraints: false });
 Participant.hasMany(AssessmentResponse, { foreignKey: 'participantId', constraints: false });
 Question.hasMany(AssessmentResponse, { foreignKey: 'questionId', constraints: false });
+User.hasMany(UserSession, { foreignKey: 'userId', constraints: false });
+User.hasMany(ModuleProgress, { foreignKey: 'userId', constraints: false });
 
 export const setupDb = async () => {
-  await sequelize.sync({ alter: true });
+  await sequelize.sync();
 };
