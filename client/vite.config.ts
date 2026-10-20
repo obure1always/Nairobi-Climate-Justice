@@ -1,19 +1,8 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
-import type { UserConfig } from 'vite'
-import type { InlineConfig } from 'vitest/node'
-
-interface VitestConfigExport extends UserConfig {
-  test: InlineConfig;
-}
 
 export default defineConfig({
-  test: {
-    environment: 'jsdom',
-    globals: true,
-    css: false,
-  },
   plugins: [
     react(),
     VitePWA({

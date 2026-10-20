@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import React from 'react';
 import { QuizEngine } from './QuizEngine';
 
 // Mock Language Context
@@ -48,8 +47,8 @@ describe('QuizEngine Component', () => {
     // Explanation should appear
     expect(screen.getByText('Climate change refers to long-term shifts in temperatures and weather patterns.')).toBeDefined();
     
-    // Next button should appear
-    const nextButton = screen.getByText('Finish');
+    // Next/Finish button should appear
+    const nextButton = screen.getByRole('button', { name: /See Results|Finish/i });
     fireEvent.click(nextButton);
     
     // onComplete should be called with score 1, total 1
