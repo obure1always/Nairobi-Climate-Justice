@@ -5,3 +5,5 @@ build/
 *.sqlite
 .DS_Store
 .agents/
+*.mp4
+coverage/
