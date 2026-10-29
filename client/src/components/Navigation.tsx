@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   Home, 
@@ -11,7 +11,16 @@ import {
   Bot, 
   Compass, 
   ClipboardCheck,
-  BookA
+  BookA,
+  Tv,
+  Menu,
+  X,
+  FileCheck,
+  Database,
+  Globe2,
+  Award,
+  GraduationCap,
+  LayoutDashboard
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useLanguage } from '../LanguageContext';
@@ -22,17 +31,25 @@ export const Navigation: React.FC = () => {
   const { language } = useLanguage();
   const { user } = useAuth();
   const isSwahili = language === 'sw';
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Desktop sidebar navigation items
+  const isStaff = user?.role === 'instructor' || user?.role === 'admin';
   const mainNavItems = [
-    { to: '/', icon: Home, label: isSwahili ? 'Mwanzo' : 'Home' },
-    { to: '/learn', icon: BookOpen, label: isSwahili ? 'Mtaala' : 'Curriculum' },
-    { to: '/buddy', icon: Bot, label: isSwahili ? 'Climate Buddy' : 'Climate Buddy', badge: isSwahili ? 'Bure' : 'Offline' },
+    { to: '/', icon: LayoutDashboard, label: isSwahili ? 'Dashibodi' : 'Dashboard' },
+    { to: '/pathways', icon: Compass, label: isSwahili ? 'Njia za Masomo (6)' : 'Pathways (6)' },
+    { to: '/learn', icon: BookOpen, label: isSwahili ? 'Mtaala wa Moduli' : 'Curriculum' },
+    { to: '/projects', icon: FileCheck, label: isSwahili ? 'Miradi ya Vitendo' : 'Applied Projects', badge: 'Rubric' },
+    { to: '/climate-data', icon: Database, label: isSwahili ? 'Data ya Tabianchi' : 'Climate Data & Maps' },
+    { to: '/case-studies', icon: Globe2, label: isSwahili ? 'Mifano ya Kenya' : 'Kenyan Case Studies' },
+    { to: '/impact', icon: Award, label: isSwahili ? 'Athari Halisi' : 'Impact Tracker' },
+    ...(isStaff ? [{ to: '/instructor', icon: GraduationCap, label: isSwahili ? 'Studio ya Mwalimu' : 'Instructor Studio', badge: 'Staff' }] : []),
+    { to: '/awareness', icon: Tv, label: isSwahili ? 'Uelewa wa Video' : 'Awareness (Videos)', badge: isSwahili ? 'Video' : 'Videos' },
+    { to: '/buddy', icon: Bot, label: isSwahili ? 'Climate Buddy' : 'Climate Buddy' },
     { to: '/scenarios', icon: Compass, label: isSwahili ? 'Matukio (14)' : 'Scenarios (14)' },
     { to: '/action-guides', icon: ClipboardCheck, label: isSwahili ? 'Miongozo (7)' : 'Action Guides (7)' },
     { to: '/glossary', icon: BookA, label: isSwahili ? 'Kamusi (70+)' : 'Glossary (70+)' },
-    { to: '/resources', icon: FolderOpen, label: isSwahili ? 'Rasilimali (18)' : 'Resources (18)' },
-    { to: '/progress', icon: Trophy, label: isSwahili ? 'Maendeleo' : 'Progress' }
+    { to: '/resources', icon: FolderOpen, label: isSwahili ? 'Rasilimali' : 'Resources' }
   ];
 
   const secondaryNavItems = [
@@ -45,8 +62,8 @@ export const Navigation: React.FC = () => {
   const mobileNavItems = [
     { to: '/', icon: Home, label: isSwahili ? 'Mwanzo' : 'Home' },
     { to: '/learn', icon: BookOpen, label: isSwahili ? 'Masomo' : 'Learn' },
+    { to: '/awareness', icon: Tv, label: isSwahili ? 'Video' : 'Videos' },
     { to: '/buddy', icon: Bot, label: isSwahili ? 'Buddy' : 'Buddy' },
-    { to: '/scenarios', icon: Compass, label: isSwahili ? 'Matukio' : 'Scenarios' },
     { to: user ? '/profile' : '/login', icon: User, label: user ? (isSwahili ? 'Akaunti' : 'Account') : (isSwahili ? 'Ingia' : 'Sign In') }
   ];
 
@@ -161,13 +178,84 @@ export const Navigation: React.FC = () => {
         </nav>
       </aside>
 
+      {/* Mobile Drawer Modal (Hub for Scenarios, Guides, Glossary, Resources) */}
+      {mobileMenuOpen && (
+        <div 
+          className="md:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex flex-col justify-end transition-opacity"
+          role="dialog"
+          aria-modal="true"
+          aria-label={isSwahili ? 'Menyu Kamili ya Mafunzo' : 'Complete Learning Hub'}
+          onClick={() => setMobileMenuOpen(false)}
+        >
+          <div 
+            className="bg-white rounded-t-3xl max-h-[80vh] overflow-y-auto p-6 pb-24 shadow-2xl space-y-4 animate-in slide-in-from-bottom"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🌿</span>
+                <h3 className="font-bold text-gray-900 text-base">
+                  {isSwahili ? 'Vituo vya Mafunzo' : 'Learning Hub'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setMobileMenuOpen(false)}
+                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center transition-colors"
+                aria-label={isSwahili ? 'Funga menyu' : 'Close menu'}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              {[
+                { to: '/climate-data', icon: Database, label: isSwahili ? 'Data na Ramani' : 'Climate Maps', color: 'text-teal-600 bg-teal-50' },
+                { to: '/case-studies', icon: Globe2, label: isSwahili ? 'Mifano ya Kenya' : 'Kenyan Cases', color: 'text-emerald-700 bg-emerald-50' },
+                { to: '/scenarios', icon: Compass, label: isSwahili ? 'Matukio (14)' : 'Scenarios (14)', color: 'text-amber-600 bg-amber-50' },
+                { to: '/action-guides', icon: ClipboardCheck, label: isSwahili ? 'Miongozo (7)' : 'Action Guides (7)', color: 'text-blue-600 bg-blue-50' },
+                { to: '/glossary', icon: BookA, label: isSwahili ? 'Kamusi (70+)' : 'Glossary (70+)', color: 'text-purple-600 bg-purple-50' },
+                { to: '/resources', icon: FolderOpen, label: isSwahili ? 'Rasilimali (18)' : 'Resources (18)', color: 'text-emerald-600 bg-emerald-50' },
+                { to: '/progress', icon: Trophy, label: isSwahili ? 'Maendeleo' : 'Progress', color: 'text-orange-600 bg-orange-50' },
+                { to: '/awareness', icon: Tv, label: isSwahili ? 'Video za Tabianchi' : 'Awareness Videos', color: 'text-red-600 bg-red-50' }
+              ].map((item) => (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-2.5 p-3 rounded-2xl border border-gray-100 hover:border-gray-200 bg-gray-50/50 hover:bg-white transition-all text-xs font-bold text-gray-800"
+                >
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${item.color}`}>
+                    <item.icon className="w-4 h-4" />
+                  </div>
+                  <span className="truncate">{item.label}</span>
+                </Link>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+              <Link to="/about" onClick={() => setMobileMenuOpen(false)} className="hover:text-forest-green font-medium">
+                {isSwahili ? 'Kuhusu' : 'About'}
+              </Link>
+              <span>•</span>
+              <Link to="/help" onClick={() => setMobileMenuOpen(false)} className="hover:text-forest-green font-medium">
+                {isSwahili ? 'Msaada' : 'Help & FAQ'}
+              </Link>
+              <span>•</span>
+              <Link to="/profile" onClick={() => setMobileMenuOpen(false)} className="hover:text-forest-green font-medium">
+                {isSwahili ? 'Akaunti' : 'Account'}
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Bottom Bar (hidden on desktop) */}
       <nav 
-        className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 pb-safe z-50 shadow-lg"
+        className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 pb-safe z-40 shadow-lg"
         aria-label="Mobile Navigation"
       >
         <div className="flex justify-around items-center h-16 px-1">
-          {mobileNavItems.map((item) => (
+          {mobileNavItems.slice(0, 4).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -182,6 +270,20 @@ export const Navigation: React.FC = () => {
               <span className="text-[10px] tracking-tight">{item.label}</span>
             </NavLink>
           ))}
+
+          {/* More Drawer Button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className={cn(
+              "flex flex-col items-center justify-center w-full h-full space-y-1 transition-all",
+              mobileMenuOpen ? "text-forest-green font-bold" : "text-gray-500 hover:text-gray-900"
+            )}
+            aria-expanded={mobileMenuOpen}
+            aria-label={isSwahili ? 'Menyu zaidi' : 'More menu'}
+          >
+            <Menu className="w-5 h-5 shrink-0" />
+            <span className="text-[10px] tracking-tight">{isSwahili ? 'Zaidi' : 'More'}</span>
+          </button>
         </div>
       </nav>
     </>

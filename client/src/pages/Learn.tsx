@@ -10,7 +10,8 @@ import {
   Bot, 
   Compass, 
   ClipboardCheck, 
-  BookA
+  BookA,
+  Tv
 } from 'lucide-react';
 
 export default function Learn() {
@@ -35,7 +36,18 @@ export default function Learn() {
       </div>
 
       {/* Quick Interactive Tools Hub */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-8">
+        <Link
+          to="/awareness"
+          className="p-3.5 rounded-2xl bg-white border border-gray-200 shadow-sm hover:border-forest-green hover:shadow-md transition flex flex-col items-center text-center group"
+        >
+          <div className="w-10 h-10 rounded-xl bg-red-500/10 text-red-600 flex items-center justify-center mb-2 group-hover:scale-110 transition">
+            <Tv className="w-5 h-5" />
+          </div>
+          <span className="font-bold text-xs text-gray-900">{isSwahili ? 'Video za Tabianchi' : 'Awareness Hub'}</span>
+          <span className="text-[10px] text-gray-500">{isSwahili ? 'Ushahidi & Hatua' : 'Verified Videos'}</span>
+        </Link>
+
         <Link
           to="/buddy"
           className="p-3.5 rounded-2xl bg-white border border-gray-200 shadow-sm hover:border-forest-green hover:shadow-md transition flex flex-col items-center text-center group"
@@ -44,7 +56,7 @@ export default function Learn() {
             <Bot className="w-5 h-5" />
           </div>
           <span className="font-bold text-xs text-gray-900">Climate Buddy</span>
-          <span className="text-[10px] text-gray-500">{isSwahili ? 'Msaidizi wa Ndani' : 'Offline Assistant'}</span>
+          <span className="text-[10px] text-gray-500">{isSwahili ? 'Msaidizi wa Sauti' : 'Voice Assistant'}</span>
         </Link>
 
         <Link
@@ -71,7 +83,7 @@ export default function Learn() {
 
         <Link
           to="/glossary"
-          className="p-3.5 rounded-2xl bg-white border border-gray-200 shadow-sm hover:border-forest-green hover:shadow-md transition flex flex-col items-center text-center group"
+          className="p-3.5 rounded-2xl bg-white border border-gray-200 shadow-sm hover:border-forest-green hover:shadow-md transition flex flex-col items-center text-center group col-span-2 sm:col-span-1"
         >
           <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-700 flex items-center justify-center mb-2 group-hover:scale-110 transition">
             <BookA className="w-5 h-5" />

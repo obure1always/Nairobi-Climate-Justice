@@ -3,7 +3,7 @@ import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
 import { modules } from '../data/modules';
 import { motion } from 'framer-motion';
-import { ArrowRight, ThermometerSun, Droplets, CloudRain } from 'lucide-react';
+import { ArrowRight, ThermometerSun, Droplets, CloudRain, Tv, Play } from 'lucide-react';
 
 export default function Home() {
   const { language } = useLanguage();
@@ -93,6 +93,56 @@ export default function Home() {
               </div>
             </motion.div>
           ))}
+        </div>
+      </section>
+
+      {/* Climate Change Awareness Section */}
+      <section className="px-6 md:px-8 mb-12">
+        <div className="bg-forest-green rounded-3xl p-6 sm:p-8 text-white shadow-md border border-emerald-900 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="max-w-xl">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-white/10 text-emerald-200 mb-3 border border-white/10">
+              <Tv className="w-3.5 h-3.5" />
+              {isSwahili ? 'Maudhui ya Kisayansi na Makala' : 'Scientific & Documentary Media'}
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold mb-2 text-white">
+              {isSwahili ? 'Uelewa wa Mabadiliko ya Tabianchi' : 'Climate Awareness Media Hub'}
+            </h2>
+            <p className="text-emerald-100 text-sm leading-relaxed mb-4">
+              {isSwahili 
+                ? 'Tazama video halisi na michoro ya satelaiti kutoka Stockholm Environment Institute, NASA, na VOA News zikieleza ukame wa Afrika Mashariki, nishati safi ya jotoardhi Kenya, na mwenendo wa joto duniani.'
+                : 'Watch verified video documentation and satellite data visualizations from Stockholm Environment Institute, NASA, and VOA News documenting East African drought anomalies, geothermal energy in Kenya, and global climate baselines.'}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => navigate('/awareness')}
+                className="bg-white text-forest-green px-6 py-2.5 rounded-full font-bold text-sm hover:bg-emerald-50 transition-colors flex items-center gap-2 shadow-sm"
+              >
+                <Play className="w-4 h-4 fill-forest-green" />
+                {isSwahili ? 'Tazama Video Zote' : 'Explore Verified Videos'}
+              </button>
+              <button
+                onClick={() => navigate('/case-studies')}
+                className="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-5 py-2.5 rounded-full font-semibold text-sm transition-colors"
+              >
+                {isSwahili ? 'Visa vya Vitendo' : 'Climate Action in Practice'}
+              </button>
+            </div>
+          </div>
+
+          <div 
+            className="w-full md:w-64 aspect-video rounded-2xl bg-black/30 border border-white/10 flex flex-col items-center justify-center p-4 text-center shrink-0 relative overflow-hidden group cursor-pointer"
+            onClick={() => navigate('/awareness')}
+          >
+            <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform mb-2">
+              <Play className="w-5 h-5 ml-0.5 fill-white" />
+            </div>
+            <span className="text-xs font-bold text-white">
+              {isSwahili ? 'Video 6 Zilizothibitishwa' : '6 Verified Videos'}
+            </span>
+            <span className="text-[10px] text-emerald-200">
+              {isSwahili ? 'Kichezaji Asilia • Ufafanuzi Sahihi' : 'Native Player • Verified Sources'}
+            </span>
+          </div>
         </div>
       </section>
 

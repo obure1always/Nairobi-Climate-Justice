@@ -12,10 +12,11 @@ import {
   KeyRound, 
   Copy, 
   Check, 
-  ShieldCheck, 
   Info,
   ArrowRight,
-  Shield
+  Phone,
+  Clock,
+  RotateCcw
 } from 'lucide-react';
 
 declare global {
@@ -24,20 +25,43 @@ declare global {
   }
 }
 
+const COUNTRY_OPTIONS = [
+  { code: '+254', country: 'Kenya', flag: '🇰🇪', placeholder: '712 345 678' },
+  { code: '+256', country: 'Uganda', flag: '🇺🇬', placeholder: '772 123 456' },
+  { code: '+255', country: 'Tanzania', flag: '🇹🇿', placeholder: '712 345 678' },
+  { code: '+251', country: 'Ethiopia', flag: '🇪🇹', placeholder: '911 234 567' }
+];
+
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { continueAsGuest, login, register, loginWithGoogle } = useAuth();
+  const { 
+    continueAsGuest, 
+    login, 
+    register, 
+    loginWithGoogle, 
+    requestPhoneOtp, 
+    loginWithPhone 
+  } = useAuth();
   const { language, setLanguage } = useLanguage();
   const isSwahili = language === 'sw';
 
   // Navigation target after auth
   const from = (location.state as any)?.from?.pathname || '/';
 
-  // Auth mode: 'signin' | 'register' | 'recovery'
-  const [mode, setMode] = useState<'signin' | 'register' | 'recovery'>('signin');
+  // Auth mode: 'signin' | 'phone' | 'register' | 'recovery'
+  const [mode, setMode] = useState<'signin' | 'phone' | 'register' | 'recovery'>('signin');
+  const [phoneAuthAvailable, setPhoneAuthAvailable] = useState<boolean>(false);
 
-  // Form fields
+  // Phone Form fields
+  const [selectedCountry, setSelectedCountry] = useState('+254');
+  const [nationalNumber, setNationalNumber] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  // Email Form fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -59,6 +83,26 @@ export default function Login() {
   // Google OAuth Client ID check
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
   const googleButtonRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch('/api/v1/auth/phone/status')
+      .then(res => res.json())
+      .then(data => {
+        if (data && typeof data.available === 'boolean') {
+          setPhoneAuthAvailable(data.available);
+        }
+      })
+      .catch(() => setPhoneAuthAvailable(false));
+  }, []);
+
+  // Timer cooldown effect
+  useEffect(() => {
+    if (cooldownRemaining <= 0) return;
+    const interval = setInterval(() => {
+      setCooldownRemaining(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [cooldownRemaining]);
 
   useEffect(() => {
     // Initialize Google Identity Services if configured
@@ -98,6 +142,52 @@ export default function Login() {
   const handleContinueAsGuest = () => {
     continueAsGuest();
     navigate(from, { replace: true });
+  };
+
+  // Phone OTP Request Handler
+  const handleSendPhoneOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setStatusMessage(null);
+
+    if (!nationalNumber.trim()) {
+      setErrorMessage(isSwahili ? 'Tafadhali weka nambari yako ya simu.' : 'Please enter your phone number.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    const res = await requestPhoneOtp(selectedCountry, nationalNumber.trim());
+    setIsSubmitting(false);
+
+    if (res.success) {
+      setOtpSent(true);
+      setCooldownRemaining(res.cooldownSeconds || 60);
+      setStatusMessage(res.message || (isSwahili ? 'Msimbo wa uthibitishaji umetumwa!' : 'Verification code sent!'));
+    } else {
+      setErrorMessage(res.error || 'Failed to dispatch verification code');
+    }
+  };
+
+  // Phone OTP Verify Handler
+  const handleVerifyPhoneOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setStatusMessage(null);
+
+    if (!otpCode.trim() || otpCode.trim().length !== 6) {
+      setErrorMessage(isSwahili ? 'Tafadhali weka msimbo wenye tarakimu 6.' : 'Please enter the 6-digit verification code.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    const res = await loginWithPhone(selectedCountry, nationalNumber.trim(), otpCode.trim(), displayName.trim() || undefined);
+    setIsSubmitting(false);
+
+    if (res.success) {
+      navigate(from, { replace: true });
+    } else {
+      setErrorMessage(res.error || (isSwahili ? 'Msimbo si sahihi' : 'Invalid verification code'));
+    }
   };
 
   // Sign In Handler
@@ -153,7 +243,6 @@ export default function Login() {
     setIsSubmitting(false);
 
     if (res.success && res.recoveryCode) {
-      // Display the high-entropy recovery code
       setCreatedRecoveryCode(res.recoveryCode);
     } else if (res.success) {
       navigate(from, { replace: true });
@@ -180,7 +269,7 @@ export default function Login() {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch('http://localhost:3001/api/v1/auth/reset-password', {
+      const res = await fetch('/api/v1/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -223,26 +312,26 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-cream-bg text-gray-900 flex flex-col justify-between p-4 sm:p-6 lg:p-8 font-inter">
+    <div className="min-h-screen bg-canvas-bg text-gray-900 flex flex-col justify-between p-4 sm:p-6 lg:p-8 font-inter">
       {/* Top Header & Language Toggle */}
       <header className="max-w-4xl w-full mx-auto flex items-center justify-between py-2">
-        <div className="flex items-center gap-2">
-          <div className="w-9 h-9 rounded-xl bg-forest-green/10 text-forest-green flex items-center justify-center font-bold">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-2xl bg-forest-green/10 text-forest-green flex items-center justify-center font-bold shadow-sm">
             <Leaf className="w-5 h-5 text-forest-green" />
           </div>
           <div>
-            <span className="text-xs font-bold uppercase tracking-wider text-forest-green block leading-none">
-              Nairobi
+            <span className="text-[11px] font-bold uppercase tracking-wider text-forest-green block leading-none">
+              Climate Learning Platform
             </span>
-            <span className="text-sm font-black text-gray-900 leading-tight">
-              Climate Justice
+            <span className="text-base font-black text-gray-900 leading-tight">
+              Climate Justice Nairobi
             </span>
           </div>
         </div>
 
         <button
           onClick={() => setLanguage(isSwahili ? 'en' : 'sw')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-300 text-xs font-semibold text-gray-700 hover:bg-white transition-all bg-white/70"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-300 text-xs font-semibold text-gray-700 hover:bg-white transition-all bg-white/70 shadow-sm"
           aria-label="Toggle language"
         >
           <span>{isSwahili ? '🇰🇪 Kiswahili' : '🇬🇧 English'}</span>
@@ -251,468 +340,616 @@ export default function Login() {
       </header>
 
       {/* Main Container */}
-      <main className="max-w-md w-full mx-auto my-6 sm:my-8">
+      <main className="max-w-lg w-full mx-auto my-6 sm:my-8">
         <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-6 sm:p-8 relative overflow-hidden">
           {/* Subtle Organic Background Accent */}
           <div className="absolute top-0 right-0 w-32 h-32 bg-forest-green/5 rounded-bl-full pointer-events-none" />
 
           {/* Brand Welcome Area */}
-          <div className="text-center space-y-2 mb-6">
+          <div className="text-center space-y-1.5 mb-6">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
               {isSwahili ? 'Jifunze Haki ya Tabianchi' : 'Climate Justice Nairobi'}
             </h1>
-            <p className="text-xs sm:text-sm font-medium text-forest-green">
+            <p className="text-xs sm:text-sm font-semibold text-forest-green">
               {isSwahili 
                 ? 'Elewa tabianchi yako. Imarisha jamii yako.' 
                 : 'Understand your climate. Strengthen your community.'}
             </p>
-            <p className="text-xs text-gray-500 max-w-xs mx-auto">
+            <p className="text-xs text-gray-500 max-w-sm mx-auto">
               {isSwahili
-                ? 'Jukwaa la bure la vijana wa Kibera na Ruaraka. Chagua namna ya kuanza kujifunza:'
-                : 'Free open learning for Nairobi youth. Choose how you want to start learning:'}
+                ? 'Jukwaa la elimu ya tabianchi kwa vijana wa Afrika Mashariki. Ingia kuanza kujifunza:'
+                : 'Africa-focused climate education platform. Sign in to start learning and earning verifiable credentials:'}
             </p>
           </div>
 
-          {/* Option A: CONTINUE AS GUEST (PROMINENT ZERO-BARRIER ENTRY) */}
-          <div className="mb-6 p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50/60 border-2 border-emerald-200/80 shadow-sm transition-all hover:border-emerald-300">
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
-                  {isSwahili ? 'Inapendekezwa • Hakuna Nenosiri' : 'Instant Access • No Account Needed'}
-                </span>
-              </div>
-              <span className="text-xs font-bold text-emerald-700 bg-white/80 px-2 py-0.5 rounded-md border border-emerald-100">
-                100% Offline
-              </span>
-            </div>
-
-            <p className="text-xs text-gray-600 mb-3.5 leading-relaxed">
-              {isSwahili
-                ? 'Anza masomo 7, maswali, na msaidizi wa tabianchi mara moja. Maendeleo yanahifadhiwa kwenye simu hii.'
-                : 'Access all 7 modules, quizzes, Climate Buddy, and narration offline. Learning saves automatically to this device.'}
-            </p>
+          {/* Primary Authentication Tabs */}
+          <div className="flex bg-gray-100 p-1 rounded-2xl mb-6 text-xs font-semibold overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setErrorMessage(null); }}
+              className={`flex-1 py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                mode === 'signin' 
+                  ? 'bg-white text-forest-green font-bold shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>{isSwahili ? 'Ingia' : 'Sign In'}</span>
+            </button>
 
             <button
-              id="continue-as-guest-btn"
               type="button"
-              onClick={handleContinueAsGuest}
-              className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 text-sm sm:text-base cursor-pointer"
+              onClick={() => { setMode('register'); setErrorMessage(null); }}
+              className={`flex-1 py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                mode === 'register' 
+                  ? 'bg-white text-forest-green font-bold shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
             >
-              <Leaf className="w-5 h-5 text-emerald-200" />
-              <span>{isSwahili ? 'Endelea kama Mgeni' : 'Continue as Guest'}</span>
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <UserIcon className="w-3.5 h-3.5" />
+              <span>{isSwahili ? 'Unda Akaunti' : 'Create Account'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setMode('phone'); setErrorMessage(null); }}
+              className={`flex-1 py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                mode === 'phone' 
+                  ? 'bg-white text-forest-green font-bold shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Phone className="w-3.5 h-3.5" />
+              <span>{isSwahili ? 'Simu (OTP)' : 'Phone Number'}</span>
             </button>
           </div>
 
-          {/* Visual Divider */}
+          {/* Status and Error Messages */}
+          {statusMessage && (
+            <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center gap-2">
+              <Check className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{statusMessage}</span>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
+              <Info className="w-4 h-4 shrink-0 text-red-500" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {/* MODE 1: PHONE NUMBER AUTHENTICATION */}
+          {mode === 'phone' && !phoneAuthAvailable && (
+            <div className="space-y-4">
+              <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-950 text-xs">
+                <div className="flex items-center gap-2 font-bold text-amber-900 mb-1">
+                  <Info className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>{isSwahili ? 'Ilani ya Lango la SMS:' : 'SMS Provider Gateway Notice:'}</span>
+                </div>
+                <p className="leading-relaxed mb-3">
+                  {isSwahili
+                    ? 'Uwasilishaji wa msimbo wa SMS kwa sasa umesitishwa kwa kuwa kitambulisho cha lango la SMS (Africa\'s Talking au Twilio) hakijawekwa kwenye seva. Tafadhali tumia Barua Pepe na Nenosiri au endelea kama Mgeni.'
+                    : 'Live SMS code dispatch is temporarily paused pending SMS provider gateway configuration (Africa\'s Talking / Twilio credentials in server environment). Please sign in using Email & Password or continue in Guest Mode.'}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMode('signin')}
+                    className="px-3 py-1.5 bg-amber-900 text-white rounded-lg font-bold text-xs hover:bg-amber-800 transition"
+                  >
+                    {isSwahili ? 'Tumia Barua Pepe' : 'Sign in with Email'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleContinueAsGuest}
+                    className="px-3 py-1.5 bg-white text-amber-950 border border-amber-300 rounded-lg font-bold text-xs hover:bg-amber-100 transition"
+                  >
+                    {isSwahili ? 'Endelea kama Mgeni' : 'Continue as Guest'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Form inputs disabled until SMS gateway provider is configured in environment */}
+              <div className="opacity-60 pointer-events-none space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                    {isSwahili ? 'Nchi na Nambari ya Simu' : 'Country & Mobile Phone Number'}
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      disabled
+                      value={selectedCountry}
+                      className="bg-gray-100 border border-gray-300 rounded-xl px-2.5 py-3 text-xs font-semibold text-gray-500"
+                    >
+                      {COUNTRY_OPTIONS.map(c => (
+                        <option key={c.code} value={c.code}>
+                          {c.flag} {c.country} ({c.code})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="tel"
+                      disabled
+                      placeholder="712 345 678"
+                      className="flex-1 bg-gray-100 border border-gray-300 rounded-xl px-3.5 py-3 text-sm text-gray-500"
+                    />
+                  </div>
+                </div>
+                <button
+                  disabled
+                  className="w-full py-3.5 px-4 bg-gray-300 text-gray-600 font-bold rounded-xl text-sm cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <Phone className="w-4 h-4" />
+                  <span>{isSwahili ? 'Lango la SMS Halijasanidiwa' : 'SMS Gateway Unconfigured'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mode === 'phone' && phoneAuthAvailable && (
+            <div className="space-y-4">
+              {!otpSent ? (
+                <form onSubmit={handleSendPhoneOtp} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                      {isSwahili ? 'Nchi na Nambari ya Simu' : 'Country & Mobile Phone Number'}
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedCountry}
+                        onChange={(e) => setSelectedCountry(e.target.value)}
+                        className="bg-gray-50 border border-gray-300 rounded-xl px-2.5 py-3 text-xs font-semibold text-gray-800 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                      >
+                        {COUNTRY_OPTIONS.map(c => (
+                          <option key={c.code} value={c.code}>
+                            {c.flag} {c.country} ({c.code})
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="tel"
+                        value={nationalNumber}
+                        onChange={(e) => setNationalNumber(e.target.value)}
+                        placeholder="712 345 678"
+                        required
+                        className="flex-1 bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                      />
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {isSwahili 
+                        ? 'Tutakutumia msimbo wa SMS wenye tarakimu 6 bila malipo.' 
+                        : 'We will dispatch a secure 6-digit SMS code to verify your phone.'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                      {isSwahili ? 'Jina Lako (Hiari)' : 'Full Name (For Certificate)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="e.g. Amina Wanjiku"
+                      className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                  >
+                    <Phone className="w-4 h-4" />
+                    <span>{isSubmitting ? (isSwahili ? 'Inatuma...' : 'Sending Code...') : (isSwahili ? 'Tuma Msimbo wa SMS' : 'Send Verification Code')}</span>
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
+                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 text-xs text-emerald-800">
+                    <p className="font-semibold">
+                      {isSwahili ? 'Msimbo umetumwa kwa:' : 'Verification code sent to:'}
+                    </p>
+                    <p className="font-bold text-sm text-emerald-950 mt-0.5">
+                      {selectedCountry} {nationalNumber}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                      {isSwahili ? 'Weka Msimbo wa Tarakimu 6' : 'Enter 6-Digit Code'}
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                      placeholder="• • • • • •"
+                      required
+                      autoFocus
+                      className="w-full text-center tracking-[0.5em] font-mono text-2xl bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <button
+                      type="button"
+                      onClick={() => { setOtpSent(false); setErrorMessage(null); }}
+                      className="text-gray-600 hover:text-forest-green font-medium underline"
+                    >
+                      {isSwahili ? 'Badili nambari' : 'Change number'}
+                    </button>
+
+                    {cooldownRemaining > 0 ? (
+                      <span className="flex items-center gap-1 text-gray-400">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>Resend in {cooldownRemaining}s</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleSendPhoneOtp}
+                        className="text-forest-green font-bold hover:underline flex items-center gap-1"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>{isSwahili ? 'Tuma tena' : 'Resend code'}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || otpCode.length !== 6}
+                    className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{isSubmitting ? (isSwahili ? 'Inathibitisha...' : 'Verifying...') : (isSwahili ? 'Thibitisha & Anza Kujifunza' : 'Verify & Start Learning')}</span>
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {/* MODE 2: EMAIL SIGN IN */}
+          {mode === 'signin' && (
+            <form onSubmit={handleSignIn} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Barua Pepe' : 'Email Address'}
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="learner@climatejustice.ke"
+                    required
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-gray-700">
+                    {isSwahili ? 'Nenosiri' : 'Password'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => { setMode('recovery'); setErrorMessage(null); }}
+                    className="text-xs font-semibold text-forest-green hover:underline"
+                  >
+                    {isSwahili ? 'Umesahau nenosiri?' : 'Forgot password?'}
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-10 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-3.5 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+              >
+                <span>{isSubmitting ? (isSwahili ? 'Inaingia...' : 'Signing in...') : (isSwahili ? 'Ingia kwa Barua Pepe' : 'Sign In with Email')}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              <div className="text-center text-xs text-gray-500 pt-2">
+                <span>{isSwahili ? 'Huna akaunti?' : "Don't have an account?"} </span>
+                <button
+                  type="button"
+                  onClick={() => { setMode('register'); setErrorMessage(null); }}
+                  className="font-bold text-forest-green hover:underline"
+                >
+                  {isSwahili ? 'Jiunge Hapa' : 'Register Here'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* MODE 3: CREATE ACCOUNT */}
+          {mode === 'register' && (
+            <form onSubmit={handleRegister} className="space-y-4">
+              <div>
+                <label htmlFor="reg-name" className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Jina au Lakabu' : 'Name or Nickname'}
+                </label>
+                <div className="relative">
+                  <UserIcon className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    id="reg-name"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. Amina Wanjiku"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="reg-email" className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Barua Pepe' : 'Email Address'}
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    id="reg-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="learner@climatejustice.ke"
+                    required
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="reg-password" className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Nenosiri (herufi 8+)' : 'Password (8+ chars)'}
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    id="reg-password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-10 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-3.5 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="reg-confirm" className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Thibitisha Nenosiri' : 'Confirm Password'}
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    id="reg-confirm"
+                    type={showPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="privacy"
+                  checked={privacyAgreed}
+                  onChange={(e) => setPrivacyAgreed(e.target.checked)}
+                  className="mt-0.5 rounded text-forest-green focus:ring-forest-green"
+                />
+                <label htmlFor="privacy" className="text-xs text-gray-600 leading-tight">
+                  {isSwahili 
+                    ? 'Ninakubali ilani ya faragha ya utafiti na uhifadhi wa maendeleo yangu.' 
+                    : 'I agree to the research privacy notice and progress tracking policy.'}
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+              >
+                <span>{isSubmitting ? (isSwahili ? 'Inaunda...' : 'Creating...') : (isSwahili ? 'Unda Akaunti Yangu' : 'Create My Account')}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              <div className="text-center text-xs text-gray-500 pt-2">
+                <span>{isSwahili ? 'Tayari una akaunti? Tumia kichupo cha juu kuingia.' : 'Already have an account? Use the Sign In tab above.'}</span>
+              </div>
+            </form>
+          )}
+
+          {/* MODE 4: PASSWORD RECOVERY */}
+          {mode === 'recovery' && (
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900">
+                <p className="font-bold flex items-center gap-1.5 mb-1">
+                  <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+                  <span>{isSwahili ? 'Urejeshaji Bila Gharama ya Barua Pepe' : 'Zero-Cost Emergency Recovery'}</span>
+                </p>
+                <p>
+                  {isSwahili 
+                    ? 'Tumia msimbo wa herufi 16 uliopewa wakati wa usajili kurekebisha nenosiri lako mara moja.' 
+                    : 'Use the 16-character recovery code provided during account registration to instantly reset your password.'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Barua Pepe Yako' : 'Your Email Address'}
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="learner@climatejustice.ke"
+                  required
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Msimbo wa Dharura (XXXX-XXXX-XXXX-XXXX)' : 'Recovery Code (XXXX-XXXX-XXXX-XXXX)'}
+                </label>
+                <input
+                  type="text"
+                  value={recoveryCode}
+                  onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())}
+                  placeholder="ABCD-EF12-34GH-56JK"
+                  required
+                  className="w-full font-mono uppercase bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                  {isSwahili ? 'Nenosiri Jipya' : 'New Password'}
+                </label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-forest-green"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+              >
+                <span>{isSubmitting ? (isSwahili ? 'Inarekebisha...' : 'Resetting...') : (isSwahili ? 'Rekebisha Nenosiri Langu' : 'Reset My Password')}</span>
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setMode('signin'); setErrorMessage(null); }}
+                  className="text-xs text-forest-green hover:underline font-semibold"
+                >
+                  {isSwahili ? '← Rudi kwenye kuingia' : '← Back to sign in'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Visual Divider & Secondary Options */}
           <div className="relative my-6 flex items-center justify-center">
             <div className="border-t border-gray-200 w-full" />
             <span className="bg-white px-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider absolute">
-              {isSwahili ? 'Au Unganisha Akaunti' : 'Or Link An Account'}
+              {isSwahili ? 'Chaguo Zaidi' : 'Additional Options'}
             </span>
           </div>
 
-          {/* Option B: GOOGLE IDENTITY SERVICES */}
-          <div className="mb-5">
-            {googleClientId ? (
-              <div ref={googleButtonRef} className="w-full flex justify-center min-h-[44px]" />
-            ) : (
-              <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-center space-y-1">
-                <div className="flex items-center justify-center gap-2 text-xs font-semibold text-gray-700">
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                  </svg>
-                  <span>{isSwahili ? 'Kuingia kwa Google kuko tayari' : 'Sign in with Google ready'}</span>
-                </div>
-                <p className="text-[11px] text-gray-500">
-                  {isSwahili 
-                    ? 'Weka VITE_GOOGLE_CLIENT_ID kwenye mazingira ili kuwezesha kitufe cha Google.' 
-                    : 'Set VITE_GOOGLE_CLIENT_ID in your environment to enable instant Google sign-in.'}
-                </p>
-              </div>
-            )}
-          </div>
+          {/* Google Identity Services Container */}
+          {googleClientId ? (
+            <div ref={googleButtonRef} className="w-full flex justify-center min-h-[44px] mb-4" />
+          ) : null}
 
-          {/* Option C: EMAIL & PASSWORD WITH SEGMENTED SWITCH */}
-          <div className="border border-gray-200 rounded-2xl p-4 bg-gray-50/50">
-            {/* Segmented Switch */}
-            <div className="flex bg-gray-200/70 p-1 rounded-xl mb-4 text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => { setMode('signin'); setErrorMessage(null); }}
-                className={`flex-1 py-2 rounded-lg transition-all ${mode === 'signin' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-              >
-                {isSwahili ? 'Ingia' : 'Sign In'}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setMode('register'); setErrorMessage(null); }}
-                className={`flex-1 py-2 rounded-lg transition-all ${mode === 'register' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-              >
-                {isSwahili ? 'Unda Akaunti' : 'Create Account'}
-              </button>
-            </div>
-
-            {/* Status & Error Alerts */}
-            {statusMessage && (
-              <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-start gap-2">
-                <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
-                <p>{statusMessage}</p>
-              </div>
-            )}
-
-            {errorMessage && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-start gap-2">
-                <Info className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
-                <p>{errorMessage}</p>
-              </div>
-            )}
-
-            {/* FORM 1: SIGN IN */}
-            {mode === 'signin' && (
-              <form onSubmit={handleSignIn} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="signin-email">
-                    {isSwahili ? 'Barua Pepe' : 'Email Address'}
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-3.5 pointer-events-none" />
-                    <input
-                      id="signin-email"
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="amina@example.org"
-                      className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green focus:border-forest-green outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-semibold text-gray-700" htmlFor="signin-password">
-                      {isSwahili ? 'Nenosiri' : 'Password'}
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => { setMode('recovery'); setErrorMessage(null); }}
-                      className="text-[11px] font-semibold text-forest-green hover:underline"
-                    >
-                      {isSwahili ? 'Umesahau nenosiri?' : 'Forgot password?'}
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3.5 pointer-events-none" />
-                    <input
-                      id="signin-password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full pl-9 pr-10 py-2.5 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green focus:border-forest-green outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 p-0.5"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-gray-900 hover:bg-black text-white font-semibold rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {isSubmitting ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <span>{isSwahili ? 'Ingia kwenye Akaunti' : 'Sign In with Email'}</span>
-                  )}
-                </button>
-              </form>
-            )}
-
-            {/* FORM 2: CREATE ACCOUNT */}
-            {mode === 'register' && (
-              <form onSubmit={handleRegister} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="register-name">
-                    {isSwahili ? 'Jina au Lakabu (Si lazima)' : 'Name or Nickname (Optional)'}
-                  </label>
-                  <div className="relative">
-                    <UserIcon className="w-4 h-4 text-gray-400 absolute left-3 top-3.5 pointer-events-none" />
-                    <input
-                      id="register-name"
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Amina"
-                      className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green focus:border-forest-green outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="register-email">
-                    {isSwahili ? 'Barua Pepe' : 'Email Address'}
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-3.5 pointer-events-none" />
-                    <input
-                      id="register-email"
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="amina@example.org"
-                      className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green focus:border-forest-green outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="register-password">
-                    {isSwahili ? 'Nenosiri (Herufi 8+)' : 'Password (8+ chars)'}
-                  </label>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3.5 pointer-events-none" />
-                    <input
-                      id="register-password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      minLength={8}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full pl-9 pr-10 py-2.5 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green focus:border-forest-green outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 p-0.5"
-                      aria-label="Toggle password visibility"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="register-confirm-password">
-                    {isSwahili ? 'Thibitisha Nenosiri' : 'Confirm Password'}
-                  </label>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3.5 pointer-events-none" />
-                    <input
-                      id="register-confirm-password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full pl-9 pr-3 py-2.5 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green focus:border-forest-green outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2 pt-1">
-                  <input
-                    id="privacy-consent"
-                    type="checkbox"
-                    checked={privacyAgreed}
-                    onChange={(e) => setPrivacyAgreed(e.target.checked)}
-                    className="mt-0.5 rounded border-gray-300 text-forest-green focus:ring-forest-green"
-                  />
-                  <label htmlFor="privacy-consent" className="text-xs text-gray-600 leading-tight">
-                    {isSwahili ? (
-                      <>Ninakubali ilani ya faragha na masharti ya mradi huu wa elimu ya tabianchi.</>
-                    ) : (
-                      <>I agree to the educational privacy notice and community learning terms.</>
-                    )}
-                  </label>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-semibold rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {isSubmitting ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <span>{isSwahili ? 'Unda Akaunti Yangu' : 'Create My Account'}</span>
-                  )}
-                </button>
-              </form>
-            )}
-
-            {/* FORM 3: RECOVERY CODE PASSWORD RESET */}
-            {mode === 'recovery' && (
-              <form onSubmit={handleResetPassword} className="space-y-3.5">
-                <div className="flex items-center justify-between pb-1 border-b border-gray-200">
-                  <span className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-forest-green" />
-                    {isSwahili ? 'Urejeshaji wa Nenosiri' : 'Password Recovery'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => { setMode('signin'); setErrorMessage(null); }}
-                    className="text-xs text-forest-green hover:underline font-medium"
-                  >
-                    {isSwahili ? 'Rudi Kuingia' : 'Back to Sign In'}
-                  </button>
-                </div>
-
-                <p className="text-[11px] text-gray-600">
-                  {isSwahili
-                    ? 'Weka barua pepe na msimbo wako wa dharura wa herufi 16 (uliopewa wakati wa usajili) ili kuweka nenosiri jipya.'
-                    : 'Enter your email and the 16-character recovery code issued when you created your account to reset your password.'}
-                </p>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="rec-email">
-                    {isSwahili ? 'Barua Pepe' : 'Email Address'}
-                  </label>
-                  <input
-                    id="rec-email"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="amina@example.org"
-                    className="w-full px-3 py-2 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="rec-code">
-                    {isSwahili ? 'Msimbo wa Dharura (XXXX-XXXX-XXXX-XXXX)' : 'Recovery Code (XXXX-XXXX-XXXX-XXXX)'}
-                  </label>
-                  <input
-                    id="rec-code"
-                    type="text"
-                    required
-                    value={recoveryCode}
-                    onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())}
-                    placeholder="ABCD-EF12-34GH-56JK"
-                    className="w-full px-3 py-2 bg-white border border-gray-300 rounded-xl text-sm font-mono tracking-wider focus:ring-2 focus:ring-forest-green outline-none uppercase"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1" htmlFor="rec-new-pwd">
-                    {isSwahili ? 'Nenosiri Jipya' : 'New Password'}
-                  </label>
-                  <input
-                    id="rec-new-pwd"
-                    type="password"
-                    required
-                    minLength={8}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 bg-white border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-forest-green outline-none"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-60"
-                >
-                  {isSubmitting ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <span>{isSwahili ? 'Weka Nenosiri Jipya' : 'Reset My Password'}</span>
-                  )}
-                </button>
-              </form>
-            )}
-          </div>
+          {/* Option: Continue as Guest (Public discovery / Preview mode) */}
+          <button
+            type="button"
+            onClick={handleContinueAsGuest}
+            className="w-full py-2.5 px-4 rounded-xl border border-gray-300 hover:bg-gray-50 text-gray-600 font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
+          >
+            <Leaf className="w-3.5 h-3.5 text-forest-green" />
+            <span>{isSwahili ? 'Gundua Mtaala kama Mgeni' : 'Continue as Guest (Explore Catalog)'}</span>
+          </button>
         </div>
       </main>
 
-      {/* ONE-TIME RECOVERY CODE DISPLAY MODAL (AFTER SUCCESSFUL REGISTRATION) */}
+      {/* Recovery Code Display Modal (After Successful Registration) */}
       {createdRecoveryCode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl border border-amber-200 space-y-5">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                <KeyRound className="w-6 h-6 text-amber-600" />
-              </div>
-              <div>
-                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
-                  {isSwahili ? 'Muhimu Sana' : 'Zero-Cost Security'}
-                </span>
-                <h2 className="text-xl font-bold text-gray-900 leading-tight">
-                  {isSwahili ? 'Msimbo Wako wa Dharura' : 'Save Your Recovery Code'}
-                </h2>
-              </div>
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto">
+              <KeyRound className="w-6 h-6" />
             </div>
 
-            <p className="text-xs sm:text-sm text-gray-600 leading-relaxed">
-              {isSwahili
-                ? 'Kwa sababu mradi huu ni wa bure na hautumii barua pepe za matangazo zenye malipo, msimbo huu ndio njia PEKEE ya kurejesha akaunti yako ukisahau nenosiri. Tafadhali unakili na uuhifadhi mahali salama!'
-                : 'Because Climate Justice Nairobi is 100% free and does not send tracking emails, this 16-character code is the ONLY way to recover your account if you forget your password. Save it in a safe place!'}
-            </p>
+            <div className="text-center space-y-1">
+              <h2 className="text-xl font-bold text-gray-900">
+                {isSwahili ? 'Hifadhi Msimbo Wako wa Dharura' : 'Save Your Recovery Code'}
+              </h2>
+              <p className="text-xs text-gray-500">
+                {isSwahili 
+                  ? 'Msimbo huu unakuwezesha kurejesha akaunti yako ukisahau nenosiri bila kutegemea barua pepe.' 
+                  : 'This zero-cost emergency code lets you reset your password without needing an email server.'}
+              </p>
+            </div>
 
-            <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex items-center justify-between">
-              <span className="font-mono text-base sm:text-lg font-bold text-amber-950 tracking-wider">
+            <div className="p-4 bg-gray-50 border-2 border-dashed border-gray-300 rounded-2xl flex items-center justify-between gap-2">
+              <span className="font-mono text-base font-bold text-gray-900 tracking-wider">
                 {createdRecoveryCode}
               </span>
               <button
                 type="button"
                 onClick={copyRecoveryCode}
-                className="p-2 text-amber-800 hover:text-amber-950 rounded-xl hover:bg-amber-100 transition-colors flex items-center gap-1 text-xs font-semibold"
-                aria-label="Copy recovery code"
+                className="p-2 rounded-xl bg-white border border-gray-200 text-gray-700 hover:text-forest-green shadow-sm transition-all"
+                title="Copy code"
               >
                 {codeCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-                <span>{codeCopied ? (isSwahili ? 'Imenakiliwa!' : 'Copied!') : (isSwahili ? 'Nakili' : 'Copy')}</span>
               </button>
-            </div>
-
-            <div className="p-3 bg-gray-50 rounded-xl text-[11px] text-gray-500 flex items-start gap-2">
-              <Shield className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <p>
-                {isSwahili
-                  ? 'Msimbo huu unaweza kutumika mara moja tu. Ukishaingia, unaweza kutoa msimbo mpya katika sehemu ya Profaili.'
-                  : 'This code can only be used once. After signing in, you can regenerate replacement codes anytime in your Profile.'}
-              </p>
             </div>
 
             <button
               type="button"
               onClick={handleFinishRegistration}
-              className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2"
+              className="w-full py-3.5 px-4 bg-forest-green hover:bg-forest-green/90 text-white font-bold rounded-xl transition-all shadow-md text-sm"
             >
-              <span>{isSwahili ? 'Nimehifadhi Msimbo - Endelea' : "I've Saved My Code — Continue"}</span>
-              <ArrowRight className="w-4 h-4" />
+              {isSwahili ? 'Nimehifadhi Msimbo, Endelea' : 'I have saved my code, Continue'}
             </button>
           </div>
         </div>
       )}
 
-      {/* Footer Trust & Ethics Notice */}
-      <footer className="max-w-md w-full mx-auto text-center text-xs text-gray-400 py-3 space-y-1">
+      {/* Footer */}
+      <footer className="text-center text-xs text-gray-500 max-w-xl mx-auto py-2">
         <p>
-          {isSwahili
-            ? 'Mradi wa haki ya tabianchi • Kibera & Ruaraka, Nairobi'
-            : 'Climate Justice Youth Education Project • Kibera & Ruaraka, Nairobi'}
+          Climate Justice Nairobi • Independent Climate Learning Platform
         </p>
-        <p className="text-[11px] text-gray-400">
-          {isSwahili
-            ? 'Haki zote zimehifadhiwa. Mafunzo ni ya bure kwa kila kijana.'
-            : 'Open educational resource. Ordinary learning never requires paid accounts.'}
+        <p className="text-[11px] text-gray-400 mt-0.5">
+          Dedicated to Community Resilience, Urban Adaptation, and Environmental Rights
         </p>
       </footer>
     </div>

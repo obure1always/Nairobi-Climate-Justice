@@ -35,7 +35,10 @@ describe('Login & Guest Access Page', () => {
       dismissTransferModal: vi.fn(),
       changePassword: vi.fn(),
       regenerateRecoveryCode: vi.fn(),
-      deleteAccount: vi.fn()
+      deleteAccount: vi.fn(),
+      requestPhoneOtp: vi.fn(),
+      loginWithPhone: vi.fn(),
+      updateProfile: vi.fn()
     });
 
     vi.spyOn(LanguageContextModule, 'useLanguage').mockReturnValue({
@@ -52,7 +55,7 @@ describe('Login & Guest Access Page', () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Climate Justice Nairobi')).toBeDefined();
+    expect(screen.getAllByText('Climate Justice Nairobi').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Understand your climate. Strengthen your community.')).toBeDefined();
     
     // Prominent Continue as Guest button

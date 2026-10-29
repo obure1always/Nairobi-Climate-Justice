@@ -4,11 +4,18 @@ import { db } from '../db';
 export interface AuthUser {
   id: string;
   email: string | null;
+  phone?: string | null;
+  phoneVerified?: boolean;
+  emailVerified?: boolean;
   name: string | null;
   displayName: string | null;
   avatarUrl?: string | null;
-  role: 'learner' | 'researcher' | 'admin';
-  authProvider: 'email' | 'google';
+  role: 'learner' | 'instructor' | 'admin' | 'researcher';
+  title?: string | null;
+  bio?: string | null;
+  expertise?: string | null;
+  institution?: string | null;
+  authProvider: 'email' | 'google' | 'phone';
 }
 
 interface AuthContextType {
@@ -23,6 +30,9 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (email: string, password: string, confirmPassword?: string, name?: string) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
   loginWithGoogle: (idToken: string) => Promise<{ success: boolean; error?: string }>;
+  requestPhoneOtp: (countryCode: string, nationalNumber: string) => Promise<{ success: boolean; message?: string; cooldownSeconds?: number; error?: string }>;
+  loginWithPhone: (countryCode: string, nationalNumber: string, code: string, displayName?: string) => Promise<{ success: boolean; error?: string }>;
+  updateProfile: (data: { displayName?: string; name?: string; avatarUrl?: string; bio?: string }) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
   logout: () => Promise<void>;
   transferGuestProgress: () => Promise<{ success: boolean; count: number }>;
   dismissTransferModal: () => void;
@@ -33,7 +43,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_BASE = 'http://localhost:3001/api/v1';
+const API_BASE = '/api/v1';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -186,6 +196,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const requestPhoneOtp = async (countryCode: string, nationalNumber: string) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/auth/phone/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countryCode, nationalNumber })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.message || data.error || 'Failed to dispatch verification code' };
+      }
+      return { 
+        success: true, 
+        message: data.message, 
+        cooldownSeconds: data.cooldownSeconds 
+      };
+    } catch {
+      return { success: false, error: 'Cannot connect to authentication service. Please check your network connection.' };
+    }
+  };
+
+  const loginWithPhone = async (countryCode: string, nationalNumber: string, code: string, displayName?: string) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/auth/phone/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ countryCode, nationalNumber, code, displayName })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Invalid verification code' };
+      }
+
+      setUser(data.user);
+      setToken(data.token);
+      setIsGuest(false);
+      localStorage.setItem('climate_justice_is_guest', 'false');
+      sessionStorage.setItem('climate_justice_token', data.token);
+
+      await checkForLocalProgress();
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Network error during phone verification. Please try again.' };
+    }
+  };
+
+  const updateProfile = async (data: { displayName?: string; name?: string; avatarUrl?: string; bio?: string }): Promise<{ success: boolean; user?: AuthUser; error?: string }> => {
+    if (!token) return { success: false, error: 'Not authenticated' };
+    try {
+      const res = await fetch(`${API_BASE}/auth/profile`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        return { success: false, error: result.error || 'Failed to update profile' };
+      }
+      setUser(result.user);
+      return { success: true, user: result.user };
+    } catch {
+      return { success: false, error: 'Network error occurred while updating profile' };
+    }
+  };
+
   const logout = async () => {
     if (token) {
       try {
@@ -304,6 +384,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         register,
         loginWithGoogle,
+        requestPhoneOtp,
+        loginWithPhone,
+        updateProfile,
         logout,
         transferGuestProgress,
         dismissTransferModal,

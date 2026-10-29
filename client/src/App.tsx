@@ -1,12 +1,19 @@
 import React from 'react';
-import { Routes, Route, Navigate, BrowserRouter } from 'react-router-dom';
+import { Routes, Route, Navigate, BrowserRouter, useLocation } from 'react-router-dom';
 import { useProgress } from './contexts/ProgressContext';
 import { useAuth } from './contexts/AuthContext';
 import { Layout } from './components/Layout';
 
 import Home from './pages/Home';
 import Learn from './pages/Learn';
-import Progress from './pages/Progress';
+import Dashboard from './pages/Dashboard';
+import Pathways from './pages/Pathways';
+import Projects from './pages/Projects';
+import InstructorStudio from './pages/InstructorStudio';
+import ClimateData from './pages/ClimateData';
+import CaseStudies from './pages/CaseStudies';
+import ImpactTracker from './pages/ImpactTracker';
+import VerifyCertificate from './pages/VerifyCertificate';
 import Resources from './pages/Resources';
 import Profile from './pages/Profile';
 import About from './pages/About';
@@ -15,6 +22,7 @@ import Glossary from './pages/Glossary';
 import Scenarios from './pages/Scenarios';
 import ActionGuides from './pages/ActionGuides';
 import Buddy from './pages/Buddy';
+import Awareness from './pages/Awareness';
 import Login from './pages/Login';
 import LessonView from './components/LessonView';
 import AssessmentView from './components/AssessmentView';
@@ -24,6 +32,7 @@ import { GuestTransferModal } from './components/GuestTransferModal';
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { settings, isLoading } = useProgress();
   const { user, isGuest, isLoading: authLoading } = useAuth();
+  const location = useLocation();
 
   if (isLoading || authLoading) {
     return (
@@ -33,9 +42,9 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     );
   }
 
-  // Learner can continue if logged in OR in guest mode
+  // Learner can continue if logged in OR in guest mode for public discovery
   if (!user && !isGuest) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
   if (!settings?.onboardingComplete) {
@@ -49,27 +58,48 @@ function AppRoutes() {
     <>
       <GuestTransferModal />
       <Routes>
+        {/* Public authentication and verification */}
         <Route path="/login" element={<Login />} />
         <Route path="/onboarding" element={<Onboarding />} />
+        <Route path="/verify/:certId" element={<VerifyCertificate />} />
+
+        {/* Protected Hub with Layout */}
         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route path="/" element={<Home />} />
+          {/* Primary Learner Dashboard & Course Hub */}
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/home" element={<Home />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/progress" element={<Dashboard />} />
           <Route path="/learn" element={<Learn />} />
-          <Route path="/progress" element={<Progress />} />
+          <Route path="/pathways" element={<Pathways />} />
+          <Route path="/projects" element={<Projects />} />
+
+          {/* Institutional & Instructor Workflows */}
+          <Route path="/instructor" element={<InstructorStudio />} />
+
+          {/* Climate Differentiators */}
+          <Route path="/climate-data" element={<ClimateData />} />
+          <Route path="/case-studies" element={<CaseStudies />} />
+          <Route path="/impact" element={<ImpactTracker />} />
+
+          {/* Existing Resources & Awareness */}
           <Route path="/resources" element={<Resources />} />
           <Route path="/glossary" element={<Glossary />} />
           <Route path="/scenarios" element={<Scenarios />} />
           <Route path="/action-guides" element={<ActionGuides />} />
           <Route path="/buddy" element={<Buddy />} />
+          <Route path="/awareness" element={<Awareness />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/about" element={<About />} />
           <Route path="/help" element={<Help />} />
           
-          {/* Module Flow Routes */}
+          {/* Advanced Course Player */}
           <Route path="/module/:moduleId" element={<LessonView />} />
           
-          {/* Research Evaluation Assessment Route */}
+          {/* Evaluation Assessment Route */}
           <Route path="/assessment" element={<AssessmentView />} />
         </Route>
+        
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
