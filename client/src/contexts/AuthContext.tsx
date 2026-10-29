@@ -30,8 +30,8 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (email: string, password: string, confirmPassword?: string, name?: string) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
   loginWithGoogle: (idToken: string) => Promise<{ success: boolean; error?: string }>;
-  requestPhoneOtp: (countryCode: string, nationalNumber: string) => Promise<{ success: boolean; message?: string; cooldownSeconds?: number; error?: string }>;
-  loginWithPhone: (countryCode: string, nationalNumber: string, code: string, displayName?: string) => Promise<{ success: boolean; error?: string }>;
+  registerWithPhone: (countryCode: string, nationalNumber: string, password: string, name: string, recoveryEmail?: string) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  loginWithPhone: (countryCode: string, nationalNumber: string, password: string) => Promise<{ success: boolean; error?: string }>;
   updateProfile: (data: { displayName?: string; name?: string; avatarUrl?: string; bio?: string }) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
   logout: () => Promise<void>;
   transferGuestProgress: () => Promise<{ success: boolean; count: number }>;
@@ -196,39 +196,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const requestPhoneOtp = async (countryCode: string, nationalNumber: string) => {
+  const registerWithPhone = async (
+    countryCode: string, 
+    nationalNumber: string, 
+    password: string, 
+    name: string, 
+    recoveryEmail?: string
+  ): Promise<{ success: boolean; recoveryCode?: string; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/phone/send-otp`, {
+      const res = await fetch(`${API_BASE}/auth/phone/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ countryCode, nationalNumber })
+        body: JSON.stringify({ countryCode, nationalNumber, password, name, recoveryEmail })
       });
       const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.message || data.error || 'Failed to dispatch verification code' };
+        return { success: false, error: data.error || 'Failed to create account with phone' };
       }
-      return { 
-        success: true, 
-        message: data.message, 
-        cooldownSeconds: data.cooldownSeconds 
-      };
+
+      setUser(data.user);
+      setToken(data.token);
+      setIsGuest(false);
+      localStorage.setItem('climate_justice_is_guest', 'false');
+      sessionStorage.setItem('climate_justice_token', data.token);
+
+      await checkForLocalProgress();
+      return { success: true, recoveryCode: data.recoveryCode };
     } catch {
       return { success: false, error: 'Cannot connect to authentication service. Please check your network connection.' };
     }
   };
 
-  const loginWithPhone = async (countryCode: string, nationalNumber: string, code: string, displayName?: string) => {
+  const loginWithPhone = async (
+    countryCode: string, 
+    nationalNumber: string, 
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/phone/verify`, {
+      const res = await fetch(`${API_BASE}/auth/phone/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ countryCode, nationalNumber, code, displayName })
+        body: JSON.stringify({ countryCode, nationalNumber, password })
       });
       const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.error || 'Invalid verification code' };
+        return { success: false, error: data.error || 'Invalid phone number or password' };
       }
 
       setUser(data.user);
@@ -240,7 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await checkForLocalProgress();
       return { success: true };
     } catch {
-      return { success: false, error: 'Network error during phone verification. Please try again.' };
+      return { success: false, error: 'Network error during phone login. Please try again.' };
     }
   };
 
@@ -384,7 +398,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         register,
         loginWithGoogle,
-        requestPhoneOtp,
+        registerWithPhone,
         loginWithPhone,
         updateProfile,
         logout,

@@ -45,31 +45,43 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
   });
 
   describe('Phone Authentication Endpoints', () => {
-    it('requests OTP and verifies phone number', async () => {
-      const sendRes = await request(app)
-        .post('/api/v1/auth/phone/send-otp')
-        .send({ countryCode: '+254', nationalNumber: '0711223344' });
+    it('registers with phone and password, establishes authenticated session', async () => {
+      const regRes = await request(app)
+        .post('/api/v1/auth/phone/register')
+        .send({ 
+          countryCode: '+254', 
+          nationalNumber: '0711223344', 
+          password: 'KevinSecurePassword123!', 
+          name: 'Kevin Omondi' 
+        });
 
-      expect(sendRes.status).toBe(200);
-      expect(sendRes.body.success).toBe(true);
-      const otp = sendRes.body.devOtp;
+      expect(regRes.status).toBe(201);
+      expect(regRes.body.success).toBe(true);
+      expect(regRes.body.token).toBeDefined();
+      expect(regRes.body.user.phone).toBe('+254711223344');
+      expect(regRes.body.user.phoneVerified).toBe(false);
 
-      const verifyRes = await request(app)
-        .post('/api/v1/auth/phone/verify')
-        .send({ countryCode: '+254', nationalNumber: '0711223344', code: otp, displayName: 'Kevin Omondi' });
+      // Logs in with phone and password
+      const loginRes = await request(app)
+        .post('/api/v1/auth/phone/login')
+        .send({
+          countryCode: '+254',
+          nationalNumber: '0711223344',
+          password: 'KevinSecurePassword123!'
+        });
 
-      expect(verifyRes.status).toBe(200);
-      expect(verifyRes.body.success).toBe(true);
-      expect(verifyRes.body.token).toBeDefined();
-      expect(verifyRes.body.user.phone).toBe('+254711223344');
+      expect(loginRes.status).toBe(200);
+      expect(loginRes.body.success).toBe(true);
+      expect(loginRes.body.token).toBeDefined();
+      expect(loginRes.body.user.phone).toBe('+254711223344');
     });
 
-    it('rejects invalid OTP attempts', async () => {
+    it('rejects invalid password attempts', async () => {
       const verifyRes = await request(app)
-        .post('/api/v1/auth/phone/verify')
-        .send({ countryCode: '+254', nationalNumber: '0711223344', code: '000000' });
+        .post('/api/v1/auth/phone/login')
+        .send({ countryCode: '+254', nationalNumber: '0711223344', password: 'WrongPassword!' });
 
-      expect(verifyRes.status).toBe(400);
+      expect(verifyRes.status).toBe(401);
       expect(verifyRes.body.success).toBe(false);
     });
   });

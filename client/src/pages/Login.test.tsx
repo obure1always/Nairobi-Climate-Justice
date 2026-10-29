@@ -73,13 +73,22 @@ describe('Login & Guest Access Page', () => {
       </MemoryRouter>
     );
 
-    // Initial mode is Sign In
+    // Initial mode is Sign In (Phone & Password is the default method)
+    expect(screen.getByRole('button', { name: /Sign In with Phone/i })).toBeDefined();
+
+    // Switch to Email method in Sign In
+    const emailMethodBtn = screen.getByRole('button', { name: /Email & Password/i });
+    fireEvent.click(emailMethodBtn);
     expect(screen.getByRole('button', { name: /Sign In with Email/i })).toBeDefined();
 
-    // Switch to Create Account
+    // Switch to Create Account (inherits selected email method)
     const createAccountTab = screen.getByRole('button', { name: /Create Account/i });
     fireEvent.click(createAccountTab);
     expect(screen.getByRole('button', { name: /Create My Account/i })).toBeDefined();
+
+    // Switch to Phone method in Create Account
+    fireEvent.click(screen.getByRole('button', { name: /Phone & Password/i }));
+    expect(screen.getByRole('button', { name: /Create Account with Phone/i })).toBeDefined();
 
     // Switch back to Sign In then click Forgot password
     const signInTab = screen.getByRole('button', { name: /Sign In/i });
@@ -100,6 +109,8 @@ describe('Login & Guest Access Page', () => {
 
     // Switch to Create Account
     fireEvent.click(screen.getByRole('button', { name: /Create Account/i }));
+    // Switch to Email registration
+    fireEvent.click(screen.getByRole('button', { name: /Email & Password/i }));
 
     // Fill in registration inputs
     fireEvent.change(screen.getByLabelText(/Name or Nickname/i), { target: { value: 'Amina Learner' } });
@@ -141,5 +152,170 @@ describe('Login & Guest Access Page', () => {
     fireEvent.click(langBtn);
 
     expect(mockSetLanguage).toHaveBeenCalledWith('sw');
+  });
+
+  it('signs in using phone number and password', async () => {
+    const mockLoginWithPhone = vi.fn().mockResolvedValue({ success: true });
+
+    vi.spyOn(AuthContextModule, 'useAuth').mockReturnValue({
+      user: null,
+      token: null,
+      isGuest: true,
+      guestId: 'guest_test_123',
+      isLoading: false,
+      error: null,
+      showTransferModal: false,
+      continueAsGuest: mockContinueAsGuest,
+      login: mockLogin,
+      register: mockRegister,
+      loginWithGoogle: mockLoginWithGoogle,
+      logout: vi.fn(),
+      transferGuestProgress: vi.fn(),
+      dismissTransferModal: vi.fn(),
+      changePassword: vi.fn(),
+      regenerateRecoveryCode: vi.fn(),
+      deleteAccount: vi.fn(),
+      registerWithPhone: vi.fn(),
+      loginWithPhone: mockLoginWithPhone,
+      updateProfile: vi.fn()
+    });
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>
+    );
+
+    // Default mode is sign in, default method is Phone & Password
+    const phoneInput = screen.getByPlaceholderText('712 345 678');
+    fireEvent.change(phoneInput, { target: { value: '0712345678' } });
+
+    const passwordInput = screen.getByPlaceholderText('••••••••');
+    fireEvent.change(passwordInput, { target: { value: 'CorrectPassword123!' } });
+
+    const signInBtn = screen.getByRole('button', { name: /Sign In with Phone/i });
+    fireEvent.click(signInBtn);
+
+    await waitFor(() => {
+      expect(mockLoginWithPhone).toHaveBeenCalledWith('+254', '0712345678', 'CorrectPassword123!');
+    });
+  });
+
+  it('creates an account using name, phone number, password, and optional recovery email', async () => {
+    const mockRegisterWithPhone = vi.fn().mockResolvedValue({ 
+      success: true, 
+      recoveryCode: 'WXYZ-1234-ABCD-5678' 
+    });
+
+    vi.spyOn(AuthContextModule, 'useAuth').mockReturnValue({
+      user: null,
+      token: null,
+      isGuest: true,
+      guestId: 'guest_test_123',
+      isLoading: false,
+      error: null,
+      showTransferModal: false,
+      continueAsGuest: mockContinueAsGuest,
+      login: mockLogin,
+      register: mockRegister,
+      loginWithGoogle: mockLoginWithGoogle,
+      logout: vi.fn(),
+      transferGuestProgress: vi.fn(),
+      dismissTransferModal: vi.fn(),
+      changePassword: vi.fn(),
+      regenerateRecoveryCode: vi.fn(),
+      deleteAccount: vi.fn(),
+      registerWithPhone: mockRegisterWithPhone,
+      loginWithPhone: vi.fn(),
+      updateProfile: vi.fn()
+    });
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>
+    );
+
+    // Switch to Create Account mode
+    const createAccountTab = screen.getByRole('button', { name: /Create Account/i });
+    fireEvent.click(createAccountTab);
+
+    // Fill phone registration form
+    fireEvent.change(screen.getByPlaceholderText('e.g. Amina Wanjiku'), { target: { value: 'Amina Wanjiku' } });
+    fireEvent.change(screen.getByPlaceholderText('712 345 678'), { target: { value: '0712345678' } });
+    fireEvent.change(screen.getByPlaceholderText('optional.backup@example.org'), { target: { value: 'backup@example.org' } });
+
+    const passwordInputs = screen.getAllByPlaceholderText('••••••••');
+    fireEvent.change(passwordInputs[0], { target: { value: 'StrongPass123!' } });
+    fireEvent.change(passwordInputs[1], { target: { value: 'StrongPass123!' } });
+
+    const consentCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(consentCheckbox);
+
+    const submitBtn = screen.getByRole('button', { name: /Create Account with Phone/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockRegisterWithPhone).toHaveBeenCalledWith(
+        '+254',
+        '0712345678',
+        'StrongPass123!',
+        'Amina Wanjiku',
+        'backup@example.org'
+      );
+    });
+
+    // Displays emergency recovery code dialog
+    await waitFor(() => {
+      expect(screen.getByText('WXYZ-1234-ABCD-5678')).toBeDefined();
+      expect(screen.getByText(/Save Your Recovery Code/i)).toBeDefined();
+    });
+  });
+
+  it('displays accurate error message when phone sign in fails without displaying any OTP code screens', async () => {
+    const mockLoginWithPhone = vi.fn().mockResolvedValue({ 
+      success: false, 
+      error: 'Invalid phone number or password.' 
+    });
+
+    vi.spyOn(AuthContextModule, 'useAuth').mockReturnValue({
+      user: null,
+      token: null,
+      isGuest: true,
+      guestId: 'guest_test_123',
+      isLoading: false,
+      error: null,
+      showTransferModal: false,
+      continueAsGuest: mockContinueAsGuest,
+      login: mockLogin,
+      register: mockRegister,
+      loginWithGoogle: mockLoginWithGoogle,
+      logout: vi.fn(),
+      transferGuestProgress: vi.fn(),
+      dismissTransferModal: vi.fn(),
+      changePassword: vi.fn(),
+      regenerateRecoveryCode: vi.fn(),
+      deleteAccount: vi.fn(),
+      registerWithPhone: vi.fn(),
+      loginWithPhone: mockLoginWithPhone,
+      updateProfile: vi.fn()
+    });
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('712 345 678'), { target: { value: '0712345678' } });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'WrongPassword!' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sign In with Phone/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid phone number or password.')).toBeDefined();
+    });
+
+    // Ensure no OTP code entry screen exists
+    expect(screen.queryByText(/Enter 6-Digit Code/i)).toBeNull();
   });
 });

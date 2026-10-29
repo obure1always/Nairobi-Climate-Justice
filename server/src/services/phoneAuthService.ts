@@ -1,290 +1,275 @@
-import crypto from 'crypto';
-import { PhoneVerification, User } from '../models/index';
-import { createSession } from './authService';
+import { User } from '../models/index';
+import { hashPassword, verifyPassword, generateRecoveryCode, createSession } from './authService';
 
-export interface SendOtpResult {
-  success: boolean;
-  message: string;
-  cooldownSeconds?: number;
-  devOtp?: string;
-  error?: string;
-}
-
-export interface VerifyOtpResult {
+export interface PhoneAuthResult {
   success: boolean;
   user?: any;
   token?: string;
+  recoveryCode?: string;
   error?: string;
-  isNewUser?: boolean;
+  cooldownSeconds?: number;
 }
 
 export const SUPPORTED_COUNTRY_CODES = [
-  { code: '+254', country: 'Kenya', minDigits: 9, maxDigits: 10, placeholder: '712 345 678' },
+  { code: '+254', country: 'Kenya', minDigits: 9, maxDigits: 9, placeholder: '712 345 678' },
   { code: '+256', country: 'Uganda', minDigits: 9, maxDigits: 9, placeholder: '772 123 456' },
   { code: '+255', country: 'Tanzania', minDigits: 9, maxDigits: 9, placeholder: '712 345 678' },
   { code: '+251', country: 'Ethiopia', minDigits: 9, maxDigits: 9, placeholder: '911 234 567' },
 ];
 
 /**
- * Normalizes phone number into standard E.164 format.
+ * In-memory brute-force protection rate limiter for phone login.
+ * Locks an account for 15 minutes after 5 consecutive failed attempts.
+ */
+interface RateLimitInfo {
+  attempts: number;
+  lockoutUntil?: number;
+}
+const loginRateLimits = new Map<string, RateLimitInfo>();
+
+export function checkLoginRateLimit(phone: string): { allowed: boolean; waitSeconds?: number } {
+  const info = loginRateLimits.get(phone);
+  if (!info) return { allowed: true };
+  if (info.lockoutUntil && Date.now() < info.lockoutUntil) {
+    const waitSeconds = Math.ceil((info.lockoutUntil - Date.now()) / 1000);
+    return { allowed: false, waitSeconds };
+  }
+  if (info.lockoutUntil && Date.now() >= info.lockoutUntil) {
+    loginRateLimits.delete(phone);
+    return { allowed: true };
+  }
+  return { allowed: true };
+}
+
+export function recordLoginFailure(phone: string): { lockedOut: boolean; waitSeconds?: number } {
+  const info = loginRateLimits.get(phone) || { attempts: 0 };
+  info.attempts += 1;
+  if (info.attempts >= 5) {
+    info.lockoutUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lockout
+    loginRateLimits.set(phone, info);
+    return { lockedOut: true, waitSeconds: 15 * 60 };
+  }
+  loginRateLimits.set(phone, info);
+  return { lockedOut: false };
+}
+
+export function clearLoginFailure(phone: string): void {
+  loginRateLimits.delete(phone);
+}
+
+/**
+ * Normalizes phone number into international standard E.164 format.
  * E.g., country code '+254' and local number '0712345678' -> '+254712345678'
  */
 export function normalizePhoneNumber(countryCode: string, nationalNumber: string): string {
-  const cleanCode = countryCode.trim().startsWith('+') ? countryCode.trim() : `+${countryCode.trim()}`;
-  let cleanNumber = nationalNumber.replace(/[\s\-\(\)\.]/g, '');
+  let cleanCode = (countryCode || '+254').trim();
+  if (!cleanCode.startsWith('+')) {
+    cleanCode = `+${cleanCode}`;
+  }
+  let cleanNumber = (nationalNumber || '').replace(/[\s\-\(\)\.]/g, '');
+
+  const bareCode = cleanCode.replace('+', '');
+  if (cleanNumber.startsWith(`+${bareCode}`)) {
+    cleanNumber = cleanNumber.substring(bareCode.length + 1);
+  } else if (cleanNumber.startsWith(bareCode)) {
+    cleanNumber = cleanNumber.substring(bareCode.length);
+  }
+
   if (cleanNumber.startsWith('0')) {
     cleanNumber = cleanNumber.substring(1);
   }
+
   return `${cleanCode}${cleanNumber}`;
 }
 
 export function isValidPhoneNumber(countryCode: string, nationalNumber: string): boolean {
-  const match = SUPPORTED_COUNTRY_CODES.find(c => c.code === countryCode);
-  let cleanNumber = nationalNumber.replace(/[\s\-\(\)\.]/g, '');
+  let cleanCode = (countryCode || '+254').trim();
+  if (!cleanCode.startsWith('+')) {
+    cleanCode = `+${cleanCode}`;
+  }
+  let cleanNumber = (nationalNumber || '').replace(/[\s\-\(\)\.]/g, '');
+
+  const bareCode = cleanCode.replace('+', '');
+  if (cleanNumber.startsWith(`+${bareCode}`)) {
+    cleanNumber = cleanNumber.substring(bareCode.length + 1);
+  } else if (cleanNumber.startsWith(bareCode)) {
+    cleanNumber = cleanNumber.substring(bareCode.length);
+  }
+
   if (cleanNumber.startsWith('0')) {
     cleanNumber = cleanNumber.substring(1);
   }
+
   if (!/^\d+$/.test(cleanNumber)) return false;
 
+  if (cleanCode === '+254') {
+    return cleanNumber.length === 9 && /^[17]\d{8}$/.test(cleanNumber);
+  }
+
+  const match = SUPPORTED_COUNTRY_CODES.find(c => c.code === cleanCode);
   if (match) {
     return cleanNumber.length >= match.minDigits && cleanNumber.length <= match.maxDigits;
   }
   return cleanNumber.length >= 7 && cleanNumber.length <= 15;
 }
 
-function hashOtp(code: string, salt: string): string {
-  return crypto.createHmac('sha256', salt).update(code).digest('hex');
-}
-
-export function isSmsProviderConfigured(): boolean {
-  const atConfigured = Boolean(process.env.AFRICASTALKING_API_KEY && process.env.AFRICASTALKING_USERNAME);
-  const twilioConfigured = Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
-  return atConfigured || twilioConfigured;
-}
-
 /**
- * Dispatches SMS through Africa's Talking, Twilio, or test runner
+ * Registers a new user account with phone number, password, and name.
+ * Phone ownership is stored as unverified. No SMS codes are sent.
  */
-async function dispatchSms(phone: string, code: string): Promise<{ dispatched: boolean; provider: string; error?: string }> {
-  const atApiKey = process.env.AFRICASTALKING_API_KEY;
-  const atUsername = process.env.AFRICASTALKING_USERNAME;
-  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-  const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-  const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
-
-  const smsText = `Your Climate Justice Nairobi verification code is: ${code}. Valid for 10 minutes. Do not share this code.`;
-
-  // 1. Africa's Talking SMS Gateway
-  if (atApiKey && atUsername) {
-    try {
-      const response = await fetch('https://api.africastalking.com/version1/messaging', {
-        method: 'POST',
-        headers: {
-          'apiKey': atApiKey,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json'
-        },
-        body: new URLSearchParams({
-          username: atUsername,
-          to: phone,
-          message: smsText
-        })
-      });
-      if (response.ok) {
-        return { dispatched: true, provider: 'africas_talking' };
-      }
-      const errText = await response.text().catch(() => '');
-      return { dispatched: false, provider: 'africas_talking', error: `Africa's Talking error: ${response.status} ${errText}` };
-    } catch (err: any) {
-      return { dispatched: false, provider: 'africas_talking', error: err?.message || 'Network error' };
-    }
-  }
-
-  // 2. Twilio SMS Gateway
-  if (twilioSid && twilioToken && twilioFrom) {
-    try {
-      const auth = Buffer.from(`${twilioSid}:${twilioToken}`).toString('base64');
-      const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${auth}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: new URLSearchParams({
-          From: twilioFrom,
-          To: phone,
-          Body: smsText
-        })
-      });
-      if (response.ok) {
-        return { dispatched: true, provider: 'twilio' };
-      }
-      const errText = await response.text().catch(() => '');
-      return { dispatched: false, provider: 'twilio', error: `Twilio error: ${response.status} ${errText}` };
-    } catch (err: any) {
-      return { dispatched: false, provider: 'twilio', error: err?.message || 'Network error' };
-    }
-  }
-
-  // 3. Test Runner Environment Only
-  if (process.env.NODE_ENV === 'test') {
-    return { dispatched: true, provider: 'test_runner' };
-  }
-
-  // 4. Live Environment Without SMS Credentials
-  return { dispatched: false, provider: 'none', error: 'No SMS gateway provider is configured in environment.' };
-}
-
-/**
- * Initiates phone verification by generating and sending a 6-digit code.
- */
-export async function sendPhoneVerificationCode(
-  countryCode: string, 
-  nationalNumber: string
-): Promise<SendOtpResult> {
+export async function registerWithPhone(
+  countryCode: string,
+  nationalNumber: string,
+  password: string,
+  name: string,
+  recoveryEmail?: string
+): Promise<PhoneAuthResult> {
   if (!countryCode || !nationalNumber) {
-    return { success: false, message: 'Country code and phone number are required.' };
+    return { success: false, error: 'Country code and phone number are required.' };
   }
 
   if (!isValidPhoneNumber(countryCode, nationalNumber)) {
-    return { success: false, message: 'Please enter a valid phone number for the selected country.' };
+    return {
+      success: false,
+      error: countryCode === '+254'
+        ? 'Please enter a valid 9-digit Kenyan phone number (e.g. 712 345 678 or 112 345 678).'
+        : 'Please enter a valid phone number for the selected country.'
+    };
+  }
+
+  if (!name || name.trim().length === 0) {
+    return { success: false, error: 'Full name or learner name is required.' };
+  }
+
+  if (!password || password.length < 8) {
+    return { success: false, error: 'Password must be at least 8 characters long.' };
   }
 
   const phone = normalizePhoneNumber(countryCode, nationalNumber);
 
-  // Check rate limiting / cooldown (60 seconds)
-  const existing = await PhoneVerification.findOne({
-    where: { phone, verified: false },
-    order: [['lastSentAt', 'DESC']]
-  });
-
-  if (existing) {
-    const elapsedSeconds = Math.floor((Date.now() - new Date(existing.lastSentAt).getTime()) / 1000);
-    if (elapsedSeconds < 60) {
-      const remaining = 60 - elapsedSeconds;
-      return {
-        success: false,
-        message: `Please wait ${remaining} seconds before requesting a new code.`,
-        cooldownSeconds: remaining
-      };
-    }
-  }
-
-  // Generate 6-digit OTP
-  const rawCode = crypto.randomInt(100000, 999999).toString();
-  const salt = crypto.randomBytes(16).toString('hex');
-  const codeHash = hashOtp(rawCode, salt);
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-  // Record verification in database
-  await PhoneVerification.create({
-    phone,
-    codeHash,
-    codeSalt: salt,
-    expiresAt,
-    attempts: 0,
-    lastSentAt: new Date(),
-    verified: false
-  });
-
-  // Dispatch SMS
-  const dispatchRes = await dispatchSms(phone, rawCode);
-
-  if (!dispatchRes.dispatched) {
+  // Check unique phone number constraint
+  const existingUser = await User.findOne({ where: { phone } });
+  if (existingUser) {
     return {
       success: false,
-      message: 'SMS verification is temporarily unavailable because an SMS gateway provider is not configured. Please sign in with Email and Password or continue as a Guest.',
-      error: dispatchRes.error || 'SMS_PROVIDER_NOT_CONFIGURED'
+      error: 'An account with this phone number already exists. Please sign in instead.'
     };
   }
 
+  // Validate optional recovery email
+  let cleanRecoveryEmail: string | null = null;
+  if (recoveryEmail && recoveryEmail.trim().length > 0) {
+    const emailCandidate = recoveryEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailCandidate)) {
+      return { success: false, error: 'Please enter a valid recovery email address or leave it blank.' };
+    }
+    const existingEmailUser = await User.findOne({ where: { email: emailCandidate } });
+    if (existingEmailUser) {
+      return { success: false, error: 'This recovery email is already associated with another account.' };
+    }
+    cleanRecoveryEmail = emailCandidate;
+  }
+
+  // Cryptographic password hash (scrypt) & 16-character recovery code
+  const { hash: passwordHash, salt: passwordSalt } = hashPassword(password);
+  const { code: recoveryCode, hash: recoveryCodeHash, salt: recoveryCodeSalt } = generateRecoveryCode();
+
+  // Create persistent user record with phoneVerified explicitly false
+  const user = await User.create({
+    phone,
+    phoneVerified: false, // Explicitly false: phone ownership is unverified
+    email: cleanRecoveryEmail,
+    name: name.trim(),
+    passwordHash,
+    passwordSalt,
+    recoveryCodeHash,
+    recoveryCodeSalt,
+    authProvider: 'phone',
+    role: 'learner'
+  });
+
+  // Create session
+  const token = await createSession(user.id);
+
   return {
     success: true,
-    message: `Verification code dispatched to ${phone}. Valid for 10 minutes.`,
-    cooldownSeconds: 60,
-    devOtp: process.env.NODE_ENV === 'test' ? rawCode : undefined
+    user: {
+      id: user.id,
+      phone: user.phone,
+      phoneVerified: false,
+      email: user.email,
+      name: user.name,
+      displayName: user.name,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+      authProvider: user.authProvider
+    },
+    token,
+    recoveryCode
   };
 }
 
 /**
- * Verifies the 6-digit code, creates/fetches user, and returns user & session token.
+ * Authenticates an existing user via phone number and password.
+ * Enforces rate limiting on consecutive failures.
  */
-export async function verifyPhoneCode(
+export async function loginWithPhone(
   countryCode: string,
   nationalNumber: string,
-  code: string,
-  displayName?: string
-): Promise<VerifyOtpResult> {
-  if (!countryCode || !nationalNumber || !code) {
-    return { success: false, error: 'Phone number and verification code are required.' };
+  password: string
+): Promise<PhoneAuthResult> {
+  if (!countryCode || !nationalNumber || !password) {
+    return { success: false, error: 'Phone number and password are required.' };
+  }
+
+  if (!isValidPhoneNumber(countryCode, nationalNumber)) {
+    return { success: false, error: 'Please enter a valid phone number.' };
   }
 
   const phone = normalizePhoneNumber(countryCode, nationalNumber);
-  const cleanCode = code.trim();
 
-  const record = await PhoneVerification.findOne({
-    where: { phone, verified: false },
-    order: [['lastSentAt', 'DESC']]
-  });
-
-  if (!record) {
-    return { success: false, error: 'No active verification code found for this number. Please request a new code.' };
-  }
-
-  // Check expiry
-  if (new Date() > new Date(record.expiresAt)) {
-    return { success: false, error: 'Verification code has expired. Please request a new code.' };
-  }
-
-  // Check max attempts
-  if (record.attempts >= 5) {
-    return { success: false, error: 'Too many incorrect attempts. Please request a new code.' };
-  }
-
-  // Verify hash
-  const computedHash = hashOtp(cleanCode, record.codeSalt);
-  if (computedHash !== record.codeHash) {
-    record.attempts += 1;
-    await record.save();
-    const remaining = 5 - record.attempts;
+  // Check rate limiting lockout
+  const rateLimit = checkLoginRateLimit(phone);
+  if (!rateLimit.allowed) {
     return {
       success: false,
-      error: `Invalid code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+      error: `Too many failed login attempts. Please wait ${rateLimit.waitSeconds} seconds before trying again.`,
+      cooldownSeconds: rateLimit.waitSeconds
     };
   }
 
-  // Code is valid! Mark verified
-  record.verified = true;
-  await record.save();
-
-  // Find or create user
-  let user = await User.findOne({ where: { phone } });
-  let isNewUser = false;
-
-  if (!user) {
-    isNewUser = true;
-    user = await User.create({
-      phone,
-      phoneVerified: true,
-      name: displayName ? displayName.trim() : `Learner (${phone.slice(-4)})`,
-      authProvider: 'phone',
-      role: 'learner'
-    });
-  } else {
-    if (!user.phoneVerified) {
-      user.phoneVerified = true;
-      await user.save();
-    }
+  const user = await User.findOne({ where: { phone } });
+  if (!user || !user.passwordHash || !user.passwordSalt) {
+    recordLoginFailure(phone);
+    return { success: false, error: 'Invalid phone number or password.' };
   }
+
+  // Constant-time password verification
+  const isValid = verifyPassword(password, user.passwordHash, user.passwordSalt);
+  if (!isValid) {
+    const failure = recordLoginFailure(phone);
+    if (failure.lockedOut) {
+      return {
+        success: false,
+        error: 'Too many failed login attempts. This account is locked for 15 minutes to prevent unauthorized access.',
+        cooldownSeconds: failure.waitSeconds
+      };
+    }
+    return { success: false, error: 'Invalid phone number or password.' };
+  }
+
+  // Reset failure tracker upon successful login
+  clearLoginFailure(phone);
 
   const token = await createSession(user.id);
 
   return {
     success: true,
-    isNewUser,
     user: {
       id: user.id,
       phone: user.phone,
+      phoneVerified: false,
       email: user.email,
       name: user.name,
       displayName: user.name,

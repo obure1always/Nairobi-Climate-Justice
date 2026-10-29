@@ -143,7 +143,7 @@ A dedicated video awareness section (`/awareness`) featuring verified documentat
   - `/src/data`: Curriculum content, awareness videos, FAQs, and validation test suites.
 - `/server`: The Express backend API.
   - `/src/models`: Sequelize ORM models.
-  - `/src/services`: Auth service, conversational grounding assistant, and TTS service.
+  - `/src/services`: Phone-and-password & email authentication service (scrypt password hashing), conversational grounding assistant, and TTS service.
   - `/src/index.ts`: API route definitions.
   - `/tests`: Test suites for auth, assistant, API, and TTS.
 

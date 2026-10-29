@@ -33,10 +33,10 @@ import {
 } from './services/authService';
 import { getTtsStatus, synthesizeCloudSpeech } from './services/ttsService';
 import { 
-  sendPhoneVerificationCode, 
-  verifyPhoneCode, 
-  SUPPORTED_COUNTRY_CODES,
-  isSmsProviderConfigured
+  registerWithPhone, 
+  loginWithPhone, 
+  normalizePhoneNumber,
+  SUPPORTED_COUNTRY_CODES 
 } from './services/phoneAuthService';
 import { 
   PRACTICAL_PROJECTS, 
@@ -470,27 +470,28 @@ app.patch(['/api/v1/auth/profile', '/api/v1/user/profile'], requireUserAuth, asy
   }
 });
 
-// Phone Verification OTP Request
-app.post('/api/v1/auth/phone/send-otp', async (req: Request, res: Response) => {
+// Phone & Password Account Registration
+app.post('/api/v1/auth/phone/register', async (req: Request, res: Response) => {
   try {
-    const { countryCode, nationalNumber } = req.body;
-    const result = await sendPhoneVerificationCode(countryCode, nationalNumber);
+    const { countryCode, nationalNumber, password, name, recoveryEmail } = req.body;
+    const result = await registerWithPhone(countryCode, nationalNumber, password, name, recoveryEmail);
     if (!result.success) {
       return res.status(400).json(result);
     }
-    return res.json(result);
+    return res.status(201).json(result);
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Phone Verification OTP Confirm & Login
-app.post('/api/v1/auth/phone/verify', async (req: Request, res: Response) => {
+// Phone & Password Account Login
+app.post('/api/v1/auth/phone/login', async (req: Request, res: Response) => {
   try {
-    const { countryCode, nationalNumber, code, displayName } = req.body;
-    const result = await verifyPhoneCode(countryCode, nationalNumber, code, displayName);
+    const { countryCode, nationalNumber, password } = req.body;
+    const result = await loginWithPhone(countryCode, nationalNumber, password);
     if (!result.success) {
-      return res.status(400).json(result);
+      const statusCode = result.cooldownSeconds ? 429 : 401;
+      return res.status(statusCode).json(result);
     }
     return res.json(result);
   } catch (err: any) {
@@ -503,31 +504,37 @@ app.get('/api/v1/auth/phone/countries', (_req: Request, res: Response) => {
   return res.json(SUPPORTED_COUNTRY_CODES);
 });
 
-// Check if SMS Gateway Provider is configured
-app.get('/api/v1/auth/phone/status', (_req: Request, res: Response) => {
-  return res.json({ available: isSmsProviderConfigured() });
-});
-
-// Reset Password with Recovery Code (Zero-Cost Email-Free Recovery)
+// Reset Password with Recovery Code (Zero-Cost Email/Phone Recovery)
+// Requires the 16-character cryptographic recovery code. Never resets by phone number alone.
 app.post('/api/v1/auth/reset-password', async (req: Request, res: Response) => {
   try {
-    const { email, recoveryCode, newPassword } = req.body;
-    if (!email || !recoveryCode || !newPassword) {
-      return res.status(400).json({ error: 'Email, recovery code, and new password are required' });
+    const { email, phone, countryCode, nationalNumber, recoveryCode, newPassword } = req.body;
+    
+    // Determine identifier (email or phone)
+    let user: User | null = null;
+
+    if (email && String(email).trim().length > 0) {
+      user = await User.findOne({ where: { email: String(email).trim().toLowerCase() } });
+    } else if (phone || (countryCode && nationalNumber)) {
+      const targetPhone = phone || normalizePhoneNumber(countryCode || '+254', nationalNumber);
+      user = await User.findOne({ where: { phone: targetPhone } });
+    }
+
+    if (!user || !recoveryCode || !newPassword) {
+      return res.status(400).json({ error: 'Valid account identifier (email or phone), 16-character recovery code, and new password are required' });
     }
 
     if (String(newPassword).length < 8) {
       return res.status(400).json({ error: 'New password must be at least 8 characters long' });
     }
 
-    const user = await User.findOne({ where: { email: String(email).trim().toLowerCase() } });
-    if (!user || !user.recoveryCodeHash || !user.recoveryCodeSalt) {
-      return res.status(400).json({ error: 'Invalid email or recovery code' });
+    if (!user.recoveryCodeHash || !user.recoveryCodeSalt) {
+      return res.status(400).json({ error: 'Invalid account identifier or recovery code' });
     }
 
     const isValid = verifyRecoveryCode(recoveryCode, user.recoveryCodeHash, user.recoveryCodeSalt);
     if (!isValid) {
-      return res.status(400).json({ error: 'Invalid email or recovery code' });
+      return res.status(400).json({ error: 'Invalid account identifier or recovery code' });
     }
 
     const { hash, salt } = hashPassword(newPassword);

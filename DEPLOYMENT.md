@@ -34,12 +34,12 @@ The application is structured into two decoupled, container-ready tiers:
 ```
 
 - **Frontend (`client/`)**: React 19 Single Page Application (SPA) built with Vite, TypeScript, and Progressive Web App (PWA) offline service workers. All API calls utilize standard relative paths (`/api/v1/*`), eliminating cross-origin CORS conflicts when reverse-proxied.
-- **Backend (`server/`)**: Express.js REST API providing secure session authentication, HMAC-SHA256 OTP phone verification, curriculum modules, idempotent progress sync, tamper-evident certificate issuance, and role-based staff authorization.
+- **Backend (`server/`)**: Express.js REST API providing secure session authentication, scrypt cryptographic password hashing for phone-and-password and email-and-password accounts, curriculum modules, idempotent progress sync, tamper-evident certificate issuance, and role-based staff authorization.
 - **Database Persistence**: Sequelize ORM utilizing SQLite (`database.sqlite`) for self-contained single-node hosting, or PostgreSQL via `DATABASE_URL` for distributed container clusters.
-- **Third-Party Gateways (Optional / Launch Dependency)**:
-  - **SMS OTP Gateway**: Africa's Talking (recommended for Kenya `+254`) or Twilio.
-  - **OAuth**: Google Identity Services.
-  - **AI / TTS**: GroqCloud (Free Developer Tier) for online Climate Buddy; falls back seamlessly to deterministic offline curriculum indexing when unconfigured.
+- **Zero Third-Party SMS Gateway Dependency**:
+  - **Phone Authentication**: Fully self-contained phone-and-password authentication. No Africa's Talking or Twilio accounts or SMS fees are required.
+  - **OAuth (Optional)**: Google Identity Services.
+  - **AI / TTS (Optional)**: GroqCloud (Free Developer Tier) for online Climate Buddy; falls back seamlessly to deterministic offline curriculum indexing when unconfigured.
 
 ---
 
@@ -102,11 +102,6 @@ Copy `server/.env.example` to `server/.env` and supply production values:
 | `SQLITE_DB_PATH` | No | `./database.sqlite` | Absolute or relative path to persistent SQLite database file. |
 | `DATABASE_URL` | No | *(None)* | PostgreSQL connection URI (takes precedence over SQLite if set). |
 | `ADMIN_EXPORT_SECRET` | Yes | *(None)* | High-entropy 64-character secret for administrative endpoints. |
-| `AFRICASTALKING_USERNAME` | Conditional | *(None)* | Africa's Talking username (required for live Kenyan SMS OTP). |
-| `AFRICASTALKING_API_KEY` | Conditional | *(None)* | Africa's Talking API key (required for live Kenyan SMS OTP). |
-| `TWILIO_ACCOUNT_SID` | Conditional | *(None)* | Twilio Account SID (alternative SMS provider). |
-| `TWILIO_AUTH_TOKEN` | Conditional | *(None)* | Twilio Auth Token (alternative SMS provider). |
-| `TWILIO_PHONE_NUMBER` | Conditional | *(None)* | Twilio E.164 phone number. |
 | `GOOGLE_CLIENT_ID` | No | *(None)* | Google OAuth Web Client ID for Google One-Tap sign-in. |
 | `GROQ_API_KEY` | No | *(None)* | GroqCloud API key for online AI assistant (falls back to offline). |
 | `OPENAI_API_KEY` | No | *(None)* | OpenAI key for neural TTS (falls back to Web Speech API). |
@@ -224,21 +219,15 @@ climatejusticenairobi.org {
 
 ---
 
-## 6. Resolving the Remaining Launch Blocker: Live SMS Gateway Setup
+## 6. Phone & Password Authentication Architecture (Zero External Cost)
 
-The platform's phone authentication (`+254` Kenya default) has been built with full HMAC-SHA256 OTP hashing, 60-second resend rate limiting, 10-minute expiry, and backend verification. 
+The platform provides genuine, production-ready phone authentication without SMS provider dependencies:
 
-When no SMS provider credentials are configured, the frontend transparently informs learners that SMS dispatch is awaiting gateway activation and prevents simulated successes.
+- **Registration**: Learners create an account using their name, phone number, and password (minimum 8 characters), with an optional secondary recovery email.
+- **Normalization**: Kenyan phone numbers are consistently normalized into standard E.164 international `+254` format (supporting `07...`, `01...`, `7...`, `+254...`, `254...`).
+- **Security & Password Hashing**: Passwords are cryptographically salted and hashed using Node's native `scryptSync` (64-byte key).
+- **Session Tokens**: Authenticated sessions are issued server-side (`/api/v1/auth/phone/login` and `/api/v1/auth/phone/register`) and verified on protected endpoints.
+- **Brute-Force Protection**: An in-memory rate-limiter locks accounts for 15 minutes after 5 consecutive failed login attempts.
+- **Emergency Password Recovery**: Each account receives a 16-character cryptographic recovery code (`XXXX-XXXX-XXXX-XXXX`) at registration. Passwords can only be reset by supplying this secret recovery code; phone ownership remains marked as unverified and passwords can never be reset by knowing the phone number alone.
+- **Zero Third-Party Cost**: No Africa's Talking or Twilio accounts, sender ID registrations, or SMS per-message fees are required to deploy or operate the platform.
 
-### To activate live Kenyan SMS delivery via Africa's Talking:
-1. Register an account at [Africa's Talking](https://account.africastalking.com/).
-2. Create an application and obtain:
-   - **Username**: (e.g. `sandbox` for development, or your production app name).
-   - **API Key**: Under `Settings > API Key`.
-3. Optionally configure an approved Kenyan Sender ID (e.g. `CLIMATE_NRB`) with CAK approval.
-4. Add credentials to `server/.env`:
-   ```bash
-   AFRICASTALKING_USERNAME=your_at_username
-   AFRICASTALKING_API_KEY=your_at_api_key
-   ```
-5. Restart the server. The `/api/v1/auth/phone/status` endpoint will automatically switch to `{ available: true }`, unlocking live SMS OTP code delivery for all Kenyan users.

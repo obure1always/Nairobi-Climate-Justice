@@ -376,32 +376,22 @@ export default function Profile() {
                   </div>
                 </div>
 
-                {/* Phone Verification State */}
+                {/* Phone Identifier (Password Secured - Unverified Phone Ownership) */}
                 <div className="p-3.5 bg-gray-50 rounded-2xl border border-gray-200/80 flex items-start gap-3">
                   <div className="mt-0.5">
-                    {user.phoneVerified ? (
-                      <CheckCircle className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <AlertCircle className="w-4 h-4 text-gray-400" />
-                    )}
+                    <Phone className="w-4 h-4 text-gray-500" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-gray-900">Phone (SMS OTP)</span>
-                      {user.phoneVerified ? (
-                        <span className="text-[10px] font-bold px-2 py-0.2 rounded-full bg-emerald-100 text-emerald-800">
-                          Verified
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-bold px-2 py-0.2 rounded-full bg-gray-100 text-gray-600">
-                          {user.phone ? 'Unverified' : 'Not Linked'}
-                        </span>
-                      )}
+                      <span className="font-bold text-gray-900">Phone Identifier</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                        {user.phone ? 'Password-Secured (Unverified)' : 'Not Linked'}
+                      </span>
                     </div>
                     <p className="text-[11px] text-gray-500 mt-0.5">
-                      {user.phoneVerified 
-                        ? `Confirmed via SMS code (${user.phone}).`
-                        : (user.phone ? `Phone number ${user.phone} attached without SMS verification.` : 'No mobile phone number linked yet.')}
+                      {user.phone 
+                        ? `Registered phone identifier: ${user.phone}. Authentication is secured by password; phone ownership is unverified.`
+                        : 'No mobile phone number attached to this account.'}
                     </p>
                   </div>
                 </div>
