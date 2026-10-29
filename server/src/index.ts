@@ -1,6 +1,26 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import { sequelize, setupDb, Participant, Module, ModuleProgress, SyncRecord, AssessmentResponse, User, UserSession } from './models/index';
+import { 
+  sequelize, 
+  setupDb, 
+  Participant, 
+  Module, 
+  ModuleProgress, 
+  SyncRecord, 
+  AssessmentResponse, 
+  User, 
+  UserSession,
+  PhoneVerification,
+  LessonProgress,
+  LessonBookmark,
+  LessonQuestion,
+  QuizSubmission,
+  ProjectSubmission,
+  Certificate,
+  ImpactAction,
+  Notification,
+  SupportTicket
+} from './models/index';
 import { processAssistantChat, isOnlineAiConfigured, getActiveProvider, getActiveModel, GROQ_MODEL } from './services/aiAssistant';
 import { 
   hashPassword, 
@@ -11,10 +31,23 @@ import {
   validateSession, 
   verifyGoogleToken 
 } from './services/authService';
+import { getTtsStatus, synthesizeCloudSpeech } from './services/ttsService';
+import { 
+  sendPhoneVerificationCode, 
+  verifyPhoneCode, 
+  SUPPORTED_COUNTRY_CODES,
+  isSmsProviderConfigured
+} from './services/phoneAuthService';
+import { 
+  PRACTICAL_PROJECTS, 
+  CLIMATE_DATASETS, 
+  AFRICAN_CASE_STUDIES, 
+  issueCertificateForUser 
+} from './services/learningService';
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '5mb' }));
 
 // Extend express Request for participantId, user & admin validation
 interface AuthenticatedRequest extends Request {
@@ -60,6 +93,23 @@ const requireUserAuth = async (req: AuthenticatedRequest, res: Response, next: N
   next();
 };
 
+// Role-Based Authorization Middleware (Learner, Instructor, Admin)
+const requireRoles = (allowedRoles: string[]) => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    await requireUserAuth(req, res, () => {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Unauthorized: Authentication required' });
+      }
+      if (!allowedRoles.includes(req.user.role)) {
+        return res.status(403).json({ 
+          error: `Forbidden: Access requires role [${allowedRoles.join(', ')}]. Current role: ${req.user.role}` 
+        });
+      }
+      next();
+    });
+  };
+};
+
 // Admin Authorization Middleware for research dataset export
 const requireAdminAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -68,14 +118,16 @@ const requireAdminAuth = (req: AuthenticatedRequest, res: Response, next: NextFu
   }
 
   const token = authHeader.substring(7).trim();
-  const configuredAdminKey = process.env.ADMIN_EXPORT_SECRET || process.env.ADMIN_SECRET_KEY || (process.env.NODE_ENV === 'test' ? 'ADMIN-TEST' : null);
+  const configuredAdminKey = process.env.ADMIN_EXPORT_SECRET || process.env.ADMIN_SECRET_KEY;
+  const isTest = process.env.NODE_ENV === 'test';
 
-  if (!configuredAdminKey) {
+  if (!configuredAdminKey && !isTest) {
     console.error('Security alert: Admin export key is not configured in server environment.');
     return res.status(503).json({ error: 'Service Unavailable: Server-side admin authorization is not configured' });
   }
 
-  if (token !== configuredAdminKey) {
+  const isValidToken = (isTest && token === 'ADMIN-TEST') || token === configuredAdminKey;
+  if (!isValidToken) {
     return res.status(403).json({ error: 'Forbidden: Invalid administrator credentials' });
   }
 
@@ -130,6 +182,25 @@ app.get('/api/v1/assistant/status', (_req: Request, res: Response) => {
     model: getActiveModel(),
     freeTier: true
   });
+});
+
+// Climate Buddy Text-to-Speech Status Endpoint
+app.get('/api/v1/assistant/tts/status', (_req: Request, res: Response) => {
+  res.json(getTtsStatus());
+});
+
+// Climate Buddy Text-to-Speech Generation Endpoint
+app.post('/api/v1/assistant/tts', async (req: Request, res: Response) => {
+  try {
+    const { text, language } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'Missing text to synthesize' });
+    }
+    const result = await synthesizeCloudSpeech(text, language || 'en');
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Climate Buddy Conversational Endpoint (General AI + Local Hybrid Grounding)
@@ -343,13 +414,98 @@ app.get('/api/v1/auth/me', requireUserAuth, async (req: AuthenticatedRequest, re
     user: {
       id: user.id,
       email: user.email,
+      emailVerified: user.authProvider === 'google',
+      phone: user.phone,
+      phoneVerified: Boolean(user.phoneVerified),
       name: user.name,
       displayName: user.name,
       avatarUrl: user.avatarUrl,
       role: user.role,
+      title: user.title,
+      bio: user.bio,
+      expertise: user.expertise,
+      institution: user.institution,
       authProvider: user.authProvider
     }
   });
+});
+
+// Update Current User Profile Endpoint
+app.patch(['/api/v1/auth/profile', '/api/v1/user/profile'], requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = req.user!;
+    const { name, displayName, avatarUrl, bio, title, institution, expertise } = req.body;
+
+    if (name !== undefined) user.name = name?.trim() || null;
+    if (displayName !== undefined && !name) user.name = displayName?.trim() || null;
+    if (avatarUrl !== undefined) user.avatarUrl = avatarUrl?.trim() || null;
+    if (bio !== undefined) user.bio = bio?.trim() || null;
+    if (title !== undefined) user.title = title?.trim() || null;
+    if (institution !== undefined) user.institution = institution?.trim() || null;
+    if (expertise !== undefined) user.expertise = expertise?.trim() || null;
+
+    await user.save();
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        emailVerified: user.authProvider === 'google',
+        phone: user.phone,
+        phoneVerified: Boolean(user.phoneVerified),
+        name: user.name,
+        displayName: user.name,
+        avatarUrl: user.avatarUrl,
+        role: user.role,
+        title: user.title,
+        bio: user.bio,
+        expertise: user.expertise,
+        institution: user.institution,
+        authProvider: user.authProvider
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Phone Verification OTP Request
+app.post('/api/v1/auth/phone/send-otp', async (req: Request, res: Response) => {
+  try {
+    const { countryCode, nationalNumber } = req.body;
+    const result = await sendPhoneVerificationCode(countryCode, nationalNumber);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Phone Verification OTP Confirm & Login
+app.post('/api/v1/auth/phone/verify', async (req: Request, res: Response) => {
+  try {
+    const { countryCode, nationalNumber, code, displayName } = req.body;
+    const result = await verifyPhoneCode(countryCode, nationalNumber, code, displayName);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Supported Country Codes
+app.get('/api/v1/auth/phone/countries', (_req: Request, res: Response) => {
+  return res.json(SUPPORTED_COUNTRY_CODES);
+});
+
+// Check if SMS Gateway Provider is configured
+app.get('/api/v1/auth/phone/status', (_req: Request, res: Response) => {
+  return res.json({ available: isSmsProviderConfigured() });
 });
 
 // Reset Password with Recovery Code (Zero-Cost Email-Free Recovery)
@@ -615,7 +771,771 @@ app.get('/api/v1/admin/export', requireAdminAuth, async (_req: AuthenticatedRequ
   }
 });
 
+// --- CORE LEARNING SYSTEM & ENHANCED WORKFLOWS ---
+
+// 1. Learner Overview & Progress
+app.get('/api/v1/learning/progress', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const moduleProgress = await ModuleProgress.findAll({ where: { userId } });
+    const lessonProgress = await LessonProgress.findAll({ where: { userId } });
+    const quizzes = await QuizSubmission.findAll({ where: { userId } });
+    const certificates = await Certificate.findAll({ where: { userId } });
+    const projects = await ProjectSubmission.findAll({ where: { userId } });
+
+    return res.json({
+      moduleProgress,
+      lessonProgress,
+      quizzes,
+      certificates,
+      projects
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/learning/progress', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { moduleId, lessonId, completed, playbackSeconds, notes } = req.body;
+
+    if (!moduleId || !lessonId) {
+      return res.status(400).json({ error: 'moduleId and lessonId are required' });
+    }
+
+    const [lp] = await LessonProgress.findOrCreate({
+      where: { userId, moduleId: String(moduleId), lessonId: String(lessonId) },
+      defaults: {
+        userId,
+        moduleId: String(moduleId),
+        lessonId: String(lessonId),
+        completed: Boolean(completed),
+        playbackSeconds: Number(playbackSeconds) || 0,
+        notes: notes || null,
+        lastAccessedAt: new Date()
+      }
+    });
+
+    if (completed !== undefined) lp.completed = Boolean(completed);
+    if (playbackSeconds !== undefined) lp.playbackSeconds = Number(playbackSeconds);
+    if (notes !== undefined) lp.notes = notes;
+    lp.lastAccessedAt = new Date();
+    await lp.save();
+
+    // Aggregate into ModuleProgress
+    const completedCount = await LessonProgress.count({
+      where: { userId, moduleId: String(moduleId), completed: true }
+    });
+
+    const [modProgress] = await ModuleProgress.findOrCreate({
+      where: { userId, moduleId: String(moduleId) },
+      defaults: {
+        userId,
+        participantId: `USER-${userId.substring(0, 8)}`,
+        moduleId: String(moduleId),
+        completedLessons: completedCount,
+        completed: completedCount >= 3,
+        lastAccessed: new Date()
+      }
+    });
+
+    modProgress.completedLessons = completedCount;
+    if (completedCount >= 3) modProgress.completed = true;
+    modProgress.lastAccessed = new Date();
+    await modProgress.save();
+
+    return res.json({ success: true, lessonProgress: lp, moduleProgress: modProgress });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Bookmarks
+app.get('/api/v1/learning/bookmarks', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const bookmarks = await LessonBookmark.findAll({ where: { userId }, order: [['createdAt', 'DESC']] });
+    return res.json(bookmarks);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/learning/bookmarks', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { moduleId, lessonId, timestampSeconds, note } = req.body;
+    const bookmark = await LessonBookmark.create({
+      userId,
+      moduleId,
+      lessonId,
+      timestampSeconds: Number(timestampSeconds) || 0,
+      note: note || null
+    });
+    return res.status(201).json(bookmark);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/v1/learning/bookmarks/:id', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    await LessonBookmark.destroy({ where: { id: req.params.id, userId } });
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Lesson Questions & Answers (Supervisor Must-Have #4)
+app.get('/api/v1/learning/questions/:moduleId/:lessonId', async (req: Request, res: Response) => {
+  try {
+    const { moduleId, lessonId } = req.params;
+    const questions = await LessonQuestion.findAll({
+      where: { moduleId, lessonId },
+      order: [['createdAt', 'DESC']]
+    });
+    return res.json(questions);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/learning/questions', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userName = req.user!.name || 'Learner';
+    const { moduleId, lessonId, question } = req.body;
+
+    if (!question || !String(question).trim()) {
+      return res.status(400).json({ error: 'Question text is required' });
+    }
+
+    const newQuestion = await LessonQuestion.create({
+      userId,
+      userName,
+      moduleId,
+      lessonId,
+      question: String(question).trim()
+    });
+
+    return res.status(201).json(newQuestion);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/learning/questions/:id/answer', requireRoles(['instructor', 'admin']), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = req.user!;
+    const { answer } = req.body;
+    if (!answer || !String(answer).trim()) {
+      return res.status(400).json({ error: 'Answer content is required' });
+    }
+
+    const question = await LessonQuestion.findByPk(req.params.id);
+    if (!question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+
+    question.isAnswered = true;
+    question.answer = String(answer).trim();
+    question.answeredBy = `${user.name || 'Instructor'} (${user.title || 'Faculty Reviewer'})`;
+    question.answeredAt = new Date();
+    await question.save();
+
+    await Notification.create({
+      userId: question.userId,
+      type: 'qa_answer',
+      title: '💬 Instructor Answered Your Question',
+      message: `${user.name || 'An instructor'} answered your question on ${question.moduleId}.`,
+      link: `/module/${question.moduleId}`
+    });
+
+    return res.json(question);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Interactive Assessments & Quizzes
+app.post('/api/v1/assessments/submit', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { moduleId, pathwayId, answers, score, totalQuestions, feedback } = req.body;
+
+    if (!moduleId || score === undefined) {
+      return res.status(400).json({ error: 'moduleId and score are required' });
+    }
+
+    const finalScore = Number(score);
+    const total = Number(totalQuestions) || 5;
+    const passed = (finalScore / total) >= 0.70;
+
+    const submission = await QuizSubmission.create({
+      userId,
+      moduleId,
+      pathwayId: pathwayId || null,
+      score: finalScore,
+      passed,
+      totalQuestions: total,
+      answers,
+      feedback
+    });
+
+    return res.status(201).json({
+      success: true,
+      submissionId: submission.id,
+      score: finalScore,
+      totalQuestions: total,
+      percentage: Math.round((finalScore / total) * 100),
+      passed,
+      feedback
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/assessments/my-results', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const submissions = await QuizSubmission.findAll({
+      where: { userId },
+      order: [['createdAt', 'DESC']]
+    });
+    return res.json(submissions);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Practical Projects & Submissions
+app.get('/api/v1/projects', (_req: Request, res: Response) => {
+  return res.json(PRACTICAL_PROJECTS);
+});
+
+app.post('/api/v1/projects/submit', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { 
+      projectId, 
+      projectType, 
+      title, 
+      summary, 
+      fileUrl, 
+      fileAttachmentUrl,
+      fileName, 
+      fileType, 
+      fileSize, 
+      calculatorData 
+    } = req.body;
+
+    if (!projectId || !title || !summary) {
+      return res.status(400).json({ error: 'projectId, title, and summary are required' });
+    }
+
+    const resolvedFileUrl = (fileUrl || fileAttachmentUrl)?.trim() || null;
+
+    const submission = await ProjectSubmission.create({
+      userId,
+      projectId,
+      projectType: projectType || 'practical_project',
+      title,
+      summary,
+      fileUrl: resolvedFileUrl,
+      fileName: fileName || null,
+      fileType: fileType || null,
+      fileSize: fileSize || null,
+      calculatorData: calculatorData || null,
+      status: 'submitted'
+    });
+
+    return res.status(201).json({
+      success: true,
+      submission,
+      message: 'Project successfully submitted for instructor rubric evaluation.'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/projects/my-submissions', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const submissions = await ProjectSubmission.findAll({
+      where: { userId },
+      order: [['createdAt', 'DESC']]
+    });
+    return res.json(submissions);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/instructor/projects', requireRoles(['instructor', 'admin']), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const submissions = await ProjectSubmission.findAll({
+      order: [['createdAt', 'DESC']]
+    });
+
+    const userIds = [...new Set(submissions.map(s => s.userId))];
+    const users = await User.findAll({ where: { id: userIds }, attributes: ['id', 'name', 'email', 'phone'] });
+    const userMap = new Map(users.map(u => [u.id, u]));
+
+    const enriched = submissions.map(s => ({
+      ...s.toJSON(),
+      learner: userMap.get(s.userId) || { name: 'Unknown Learner' }
+    }));
+
+    return res.json(enriched);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/instructor/projects/:id/grade', requireRoles(['instructor', 'admin']), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = req.user!;
+    const { score, rubricScores, instructorFeedback, status } = req.body;
+    const submission = await ProjectSubmission.findByPk(req.params.id);
+    if (!submission) {
+      return res.status(404).json({ error: 'Project submission not found' });
+    }
+
+    submission.score = Number(score);
+    submission.rubricScores = rubricScores;
+    submission.instructorFeedback = instructorFeedback;
+    submission.status = status || (Number(score) >= 70 ? 'graded' : 'needs_revision');
+    submission.gradedBy = `${user.name || 'Instructor'} (${user.title || 'Faculty Reviewer'})`;
+    submission.gradedAt = new Date();
+    await submission.save();
+
+    await Notification.create({
+      userId: submission.userId,
+      type: 'project_graded',
+      title: '📋 Project Evaluation Complete',
+      message: `Your project "${submission.title}" was evaluated. Score: ${submission.score}/100. Status: ${submission.status}.`,
+      link: '/projects'
+    });
+
+    return res.json({ success: true, submission });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Verifiable Digital Certificates (Supervisor Must-Have #6)
+app.post('/api/v1/certificates/issue', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { pathwayId, pathwayTitle, skills } = req.body;
+    const result = await issueCertificateForUser(userId, pathwayId, pathwayTitle, skills);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/certificates/my-certificates', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const certificates = await Certificate.findAll({
+      where: { userId },
+      order: [['issueDate', 'DESC']]
+    });
+    return res.json(certificates);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Public certificate verification endpoint (Unprotected for QR codes and employer/academic verification)
+app.get('/api/v1/certificates/verify/:certId', async (req: Request, res: Response) => {
+  try {
+    const { certId } = req.params;
+    const cert = await Certificate.findOne({ where: { id: certId } });
+    if (!cert) {
+      return res.status(404).json({ 
+        verified: false, 
+        error: 'Certificate not found or invalid certificate identifier.' 
+      });
+    }
+
+    return res.json({
+      verified: true,
+      certificateId: cert.id,
+      learnerName: cert.learnerName,
+      courseTitle: cert.courseTitle,
+      pathwayId: cert.pathwayId,
+      issuingOrganization: cert.issuingOrg,
+      instructor: cert.instructorName,
+      instructorTitle: cert.instructorTitle,
+      issueDate: cert.issueDate,
+      distinction: cert.distinction,
+      skillsVerified: cert.skills,
+      verifiedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Interactive Climate Data & African Case Studies
+app.get('/api/v1/climate/datasets', (_req: Request, res: Response) => {
+  return res.json(CLIMATE_DATASETS);
+});
+
+app.get('/api/v1/climate/case-studies', (_req: Request, res: Response) => {
+  return res.json(AFRICAN_CASE_STUDIES);
+});
+
+// 8. Real-World Impact Tracking
+app.get('/api/v1/impact/actions', async (_req: Request, res: Response) => {
+  try {
+    const actions = await ImpactAction.findAll({ order: [['createdAt', 'DESC']] });
+    return res.json(actions);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/impact/actions', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userName = req.user!.name || 'Community Leader';
+    const { actionType, title, description, quantity, unit, methodology, assumptions, evidenceUrl } = req.body;
+
+    if (!actionType || !title || quantity === undefined) {
+      return res.status(400).json({ error: 'actionType, title, and quantity are required' });
+    }
+
+    const action = await ImpactAction.create({
+      userId,
+      userName,
+      actionType,
+      title,
+      description: description || '',
+      quantity: Number(quantity) || 0,
+      unit: unit || 'units',
+      methodology: methodology || 'Self-reported community monitoring log',
+      assumptions: assumptions || 'Empirical local calculation',
+      evidenceUrl: evidenceUrl || null,
+      status: 'self_reported'
+    });
+
+    return res.status(201).json({ success: true, action });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/instructor/impact/:id/verify', requireRoles(['instructor', 'admin']), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = req.user!;
+    const { status } = req.body;
+    const action = await ImpactAction.findByPk(req.params.id);
+    if (!action) {
+      return res.status(404).json({ error: 'Action record not found' });
+    }
+
+    action.status = status === 'verified' ? 'verified' : 'rejected';
+    action.verifiedBy = `${user.name || 'Instructor'} (${user.title || 'Reviewer'})`;
+    action.verifiedAt = new Date();
+    await action.save();
+
+    return res.json({ success: true, action });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Institutional Analytics & Cohort Export
+app.get('/api/v1/instructor/analytics', requireRoles(['instructor', 'admin']), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const totalLearners = await User.count({ where: { role: 'learner' } });
+    const totalCompletions = await ModuleProgress.count({ where: { completed: true } });
+    const totalCertificates = await Certificate.count();
+    const totalQuizzes = await QuizSubmission.count();
+    const passedQuizzes = await QuizSubmission.count({ where: { passed: true } });
+    const pendingProjects = await ProjectSubmission.count({ where: { status: 'submitted' } });
+    const totalImpactActions = await ImpactAction.count();
+
+    return res.json({
+      totalLearners,
+      totalCompletions,
+      totalCertificates,
+      totalQuizzes,
+      quizPassRate: totalQuizzes > 0 ? Math.round((passedQuizzes / totalQuizzes) * 100) : 0,
+      pendingProjects,
+      totalImpactActions
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/instructor/cohort-export', requireRoles(['instructor', 'admin']), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const learners = await User.findAll({
+      where: { role: 'learner' },
+      attributes: ['id', 'name', 'email', 'phone', 'createdAt']
+    });
+    const progress = await ModuleProgress.findAll();
+    const certificates = await Certificate.findAll();
+    const projects = await ProjectSubmission.findAll();
+
+    return res.json({
+      exportedAt: new Date().toISOString(),
+      institution: 'Climate Justice Nairobi - Learning Cohort',
+      totalCohortSize: learners.length,
+      learners,
+      progress,
+      certificates,
+      projects
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 10. Notifications
+app.get('/api/v1/notifications', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const notifications = await Notification.findAll({
+      where: { userId },
+      order: [['createdAt', 'DESC']],
+      limit: 20
+    });
+    return res.json(notifications);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/v1/notifications/:id/read', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    await Notification.update({ read: true }, { where: { id: req.params.id, userId } });
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 11. AI Error Report
+app.post('/api/v1/assistant/report-error', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { query, aiResponse, userCorrection, lessonRef } = req.body;
+    console.warn('[AI-ERROR-REPORT]', {
+      reportedBy: req.user!.id,
+      query,
+      aiResponse,
+      userCorrection,
+      lessonRef,
+      timestamp: new Date().toISOString()
+    });
+    return res.json({
+      success: true,
+      message: 'Thank you. Your report has been recorded for curriculum refinement and grounding verification.'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 12. Support & Help Center Inquiries
+app.post(['/api/v1/support/tickets', '/api/v1/support/inquiries'], async (req: Request, res: Response) => {
+  try {
+    const { name, email, category, subject, message } = req.body;
+
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ error: 'A valid email address is required' });
+    }
+    if (!subject || typeof subject !== 'string' || !subject.trim()) {
+      return res.status(400).json({ error: 'Subject is required' });
+    }
+    if (!message || typeof message !== 'string' || message.trim().length < 10) {
+      return res.status(400).json({ error: 'Message must be at least 10 characters long' });
+    }
+
+    let userId: string | null = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7).trim();
+      const user = await validateSession(token);
+      if (user) {
+        userId = user.id;
+      }
+    }
+
+    const ticketId = `CJN-TICK-${Math.random().toString(36).substring(2, 7).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+
+    const ticket = await SupportTicket.create({
+      id: ticketId,
+      userId,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      category: category?.trim() || 'general',
+      subject: subject.trim(),
+      message: message.trim(),
+      status: 'open'
+    });
+
+    return res.status(201).json({
+      success: true,
+      ticketId: ticket.id,
+      message: `Your inquiry has been logged with reference ${ticket.id}. Our academic and technical support team will reply to ${ticket.email}.`
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/support/tickets', async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized: Authentication required' });
+    }
+    const token = authHeader.substring(7).trim();
+    const user = await validateSession(token);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid session' });
+    }
+
+    const where = user.role === 'admin' || user.role === 'instructor' ? {} : { userId: user.id };
+    const tickets = await SupportTicket.findAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit: 50
+    });
+
+    return res.json({ success: true, tickets });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+const seedDemoAccounts = async () => {
+  const adminEmail = 'admin@climatejustice.ke';
+  const instructorEmail = 'instructor@climatejustice.ke';
+  const learnerEmail = 'learner@climatejustice.ke';
+
+  const defaultPassword = 'Password123!';
+  const { hash, salt } = hashPassword(defaultPassword);
+
+  // Admin
+  const admin = await User.findOne({ where: { email: adminEmail } });
+  if (!admin) {
+    await User.create({
+      email: adminEmail,
+      name: 'Dr. John Obure (Admin)',
+      passwordHash: hash,
+      passwordSalt: salt,
+      authProvider: 'email',
+      role: 'admin',
+      title: 'Platform Director & Curriculum Lead',
+      institution: 'Climate Justice Nairobi'
+    });
+  }
+
+  // Instructor
+  const instructor = await User.findOne({ where: { email: instructorEmail } });
+  if (!instructor) {
+    await User.create({
+      email: instructorEmail,
+      name: 'Dr. Wanjiku Muthoni (Instructor)',
+      passwordHash: hash,
+      passwordSalt: salt,
+      authProvider: 'email',
+      role: 'instructor',
+      title: 'Senior Climatologist & Lead Instructor',
+      institution: 'Climate Justice Nairobi',
+      expertise: 'Climate Adaptation, Spatial Modeling & Urban Resiliency'
+    });
+  }
+
+  // Learner
+  const learner = await User.findOne({ where: { email: learnerEmail } });
+  let aminaId: string;
+  if (!learner) {
+    const created = await User.create({
+      email: learnerEmail,
+      phone: '+254712345678',
+      phoneVerified: true,
+      name: 'Amina Wanjiku (Learner)',
+      passwordHash: hash,
+      passwordSalt: salt,
+      authProvider: 'email',
+      role: 'learner',
+      institution: 'Nairobi Community Climate Action Network'
+    });
+    aminaId = created.id;
+  } else {
+    aminaId = learner.id;
+  }
+
+  // Seed Verified Demo Certificate for public URL verification
+  const demoCert = await Certificate.findByPk('CJN-2026-DEMO');
+  if (!demoCert) {
+    await Certificate.create({
+      id: 'CJN-2026-DEMO',
+      userId: aminaId,
+      learnerName: 'Amina Wanjiku',
+      courseTitle: 'Climate Science Fundamentals & Nairobi Adaptation',
+      pathwayId: 'pathway-fundamentals',
+      issuingOrg: 'Climate Justice Nairobi',
+      instructorName: 'John Obure',
+      instructorTitle: 'Climate Activist and Founder',
+      issueDate: new Date('2026-10-28'),
+      skills: [
+        'Decadal Climate Trajectory Analysis (KMD)',
+        'Nairobi Urban Heat Island Mapping',
+        'Community Flood Hazard Assessment',
+        'IPCC Tier-1 Carbon Footprint Estimation'
+      ],
+      verificationUrl: '/verify/CJN-2026-DEMO',
+      distinction: 'Honors Distinction'
+    });
+  } else {
+    demoCert.instructorName = 'John Obure';
+    demoCert.instructorTitle = 'Climate Activist and Founder';
+    await demoCert.save();
+  }
+
+  // Seed sample graded project submission
+  const demoSub = await ProjectSubmission.findOne({ where: { projectId: 'proj-carbon-footprint', userId: aminaId } });
+  if (!demoSub) {
+    await ProjectSubmission.create({
+      userId: aminaId,
+      projectId: 'proj-carbon-footprint',
+      projectType: 'carbon-audit',
+      title: 'Household & Micro-Enterprise Carbon Footprint Assessment in Mathare',
+      summary: 'A localized carbon audit assessing household LPG, matatu commuting, and organic waste diversion in Mathare 4A.',
+      fileUrl: 'https://climatejustice.ke/submissions/mathare-carbon-audit.pdf',
+      status: 'graded',
+      score: 92,
+      rubricScores: { methodology: 28, calculations: 27, impact: 19, feasibility: 18 },
+      instructorFeedback: 'Outstanding application of local Kenyan emission factors. Clear and realistic household waste diversion plan. Meets all evaluation criteria for environmental certification.',
+      gradedBy: 'Dr. Wanjiku Muthoni',
+      gradedAt: new Date()
+    });
+  }
+};
+
 const seedModules = async () => {
+  await seedDemoAccounts();
   const count = await Module.count();
   if (count === 0) {
     await Module.bulkCreate([
