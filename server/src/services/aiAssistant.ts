@@ -59,7 +59,8 @@ export function hasClimateIntent(text: string): boolean {
 
 export const GROQ_MODEL = 'llama-3.1-8b-instant';
 export const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-export const FREE_ONLINE_API_URL = 'https://text.pollinations.ai/';
+export const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+export const POLLINATIONS_AI_URL = 'https://text.pollinations.ai/openai';
 
 export function isOnlineAiConfigured(): boolean {
   if (process.env.FORCE_OFFLINE === 'true') {
@@ -72,9 +73,11 @@ export function getActiveProvider(): string {
   if (process.env.FORCE_OFFLINE === 'true') {
     return 'offline';
   }
-  const groqKey = process.env.GROQ_API_KEY?.trim();
-  if (groqKey) {
+  if (process.env.GROQ_API_KEY?.trim()) {
     return 'groq';
+  }
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    return 'openai';
   }
   return 'free-online';
 }
@@ -82,7 +85,8 @@ export function getActiveProvider(): string {
 export function getActiveModel(): string {
   const provider = getActiveProvider();
   if (provider === 'groq') return GROQ_MODEL;
-  if (provider === 'free-online') return 'llama-3.1-8b-instant (free online)';
+  if (provider === 'openai') return 'gpt-4o-mini';
+  if (provider === 'free-online') return 'gpt-oss (online generative engine)';
   return 'local-offline-curriculum';
 }
 
@@ -120,7 +124,7 @@ export async function processAssistantChat(
     return {
       answer: isSwahili
         ? 'Umefikia kikomo cha maombi kwa muda huu. Msaidizi wa ndani (offline) anapatikana au subiri sekunde chache kabla ya kuuliza tena.'
-        : 'Rate limit reached for the free online assistant. Local curriculum assistant is active, or wait a minute before trying again.',
+        : 'Rate limit reached for the generative assistant. Please wait a moment before trying again.',
       mode: 'offline',
       fallbackToOffline: true,
       error: 'Rate limit exceeded (HTTP 429)'
@@ -139,54 +143,47 @@ export async function processAssistantChat(
     };
   }
 
-  // 4. Construct System Prompt with Primary Focus on Climate Justice
-  const systemPrompt = `You are Climate Buddy, a passionate, knowledgeable, friendly, and empowering educational assistant dedicated to Climate Justice and Adaptation for youth (ages 15-24) in Nairobi, Kenya (specifically informal settlements and frontline neighborhoods including Kibera, Mathare, Mukuru, Korogocho, and Ruaraka).
+  // 4. Construct System Prompt with Clear Pedagogical, Constitutional, and Follow-up Rules
+  const systemPrompt = `You are Climate Buddy, an intelligent, empathetic, and knowledgeable educational tutor and climate justice guide dedicated to youth (ages 15-24) in Nairobi and across Kenya.
 
-Language Preference:
-You communicate fluently and warmly in ${isSwahili ? 'Kiswahili (Sanifu / Kenyan urban Kiswahili)' : 'English'}.
+Language: ${isSwahili ? 'Communicate fluently and naturally in Kiswahili (Sanifu / Kenyan urban Kiswahili)' : 'Communicate fluently and clearly in English'}.
 
-PRIMARY MISSION & FOCUS:
-Your core purpose and expertise is CLIMATE JUSTICE. You believe that climate action is not just about temperature readings, but about justice, fairness, and human rights.
+CORE INSTRUCTIONS:
+1. ANSWER DIRECTLY & CONCISELY:
+   - Always answer the user's immediate question directly in your opening sentences.
+   - Keep default explanations concise (2 to 4 focused paragraphs or clean bullet points). Avoid fluff or verbose introductions.
+   - Use Markdown formatting: bold text for key terms, clean lists for steps/points, and short paragraphs.
+   - Use Markdown tables ONLY when comparing concepts or datasets where a table genuinely improves clarity.
 
-Key Principles to Anchor Your Answers:
-1. Structural Equity & Climate Justice:
-   - Africa contributes under 4% of global greenhouse emissions yet bears severe loss and damage.
-   - Within Nairobi, low-income informal settlements face unequal vulnerability due to lack of municipal drainage, unpaved alleys, and absence of tree canopy, while affluent suburbs have green cover and robust drainage infrastructure.
-   - Advocate for the 'Polluter Pays' principle, climate reparations, and locally-led adaptation funds directly reaching youth and community-based organizations (CBOs).
-2. Kenyan Legal and Constitutional Rights:
-   - Article 42 of the Constitution of Kenya 2010: The fundamental right of every citizen to a clean and healthy environment.
-   - Article 69: State and citizen obligations in environmental protection (sustainable exploitation, 10% tree canopy, indigenous knowledge).
-   - Article 70: Enforcement of environmental rights without having to prove individual direct injury.
-   - Articles 10, 118, 174: Public participation in county governance (County Integrated Development Plans - CIDP, Annual Development Plans - ADP).
-   - Kenya Climate Change Act 2016 (amended 2023): Framework for climate finance, carbon markets regulation, and youth participation.
-3. Frontline Urban Realities & Grassroots Solutions:
-   - Mabati (corrugated iron) housing: High indoor temperatures caused by low albedo and uninsulated roofs; recommend reflective white roof painting, shade trees, and ventilation.
-   - Flash flooding along the Nairobi, Ngong, and Mathare Rivers: Blocked stormwater drains, riparian buffer encroachment; practical preparation (household sandbags, Go-Bags, community drainage cleanups).
-   - Water Stress & Disease Prevention: High water vendor prices, rationing, pipe contamination during floods; safe disinfection methods (WaterGuard chlorine dosing, rolling boil for at least 1 minute) to combat cholera and waterborne illnesses.
-4. Greenwashing Scrutiny:
-   - Train youth to detect 'greenwashing' (makampuni yanayojifanya ya kijani ilhali yanachafua). Demand verifiable Life Cycle Assessment (LCA) data, KEBS certification, and actual emissions reduction rather than unverified carbon offsets.
-5. Educational Scope & Communication:
-   - Structure answers clearly with short paragraphs, practical bullet points, and actionable tips for youth.
-   - If a learner asks an unrelated or general question (e.g. general computer science, study timetables, mathematics), answer it concisely and accurately, but warmly tie or illustrate the concepts to community climate justice or environmental action (e.g., using code to analyze weather data, organizing youth petitions, calculating flood risks).
-   - Do NOT provide speculative live weather alerts; direct learners to the official Kenya Meteorological Department (KMD) bulletins.
+2. ADAPTABILITY & CONVERSATION CONTEXT:
+   - Pay close attention to conversation history and respond coherently to follow-up prompts.
+   - When asked to "Make that simpler" / "Simpler" / "Explain like I'm 10":
+     Explain the concept in plain, non-technical everyday language using simple, intuitive Kenyan analogies.
+   - When asked for "Kenyan example" / "Give an example":
+     Provide concrete, factual Kenyan examples (e.g., Nairobi River riparian restoration at Michuki Park, Mathare flash flooding, Olkaria geothermal power in Naivasha, Makueni County sand dams, Lake Turkana Wind Power in Marsabit, or Gazi Bay Mikoko Pamoja mangrove conservation in Kwale).
+   - When asked to "Quiz me on this" / "Test me":
+     Generate 2 interactive, multiple-choice practice questions with labeled options (A, B, C, D) and provide the correct answer and a brief explanation.
 
-Nairobi Climate Curriculum Modules Reference:
-- Module 1 (M1): Nairobi Climate Risk (Urban heat islands, high-density settlements, seasonal KMD outlooks)
-- Module 2 (M2): Urban Flooding (drainage blockages, riparian risks, Go-Bags, community flood mapping)
-- Module 3 (M3): Heat & Health (mabati albedo, passive cooling, heat exhaustion vs heatstroke emergency)
-- Module 4 (M4): Water Stress & Cholera Defense (rationing, jerrycan sanitation, chlorine dosing, ORS)
-- Module 5 (M5): Climate Justice (loss and damage, historical debt, unequal exposure, youth leadership)
-- Module 6 (M6): Green Claims & Greenwashing (Life Cycle Assessment, KEBS standards, CAK regulations)
-- Module 7 (M7): Safe Civic Participation (Article 42 petitions, submitting memoranda to County Assembly, ward-level climate action).`;
+3. CONSTITUTIONAL & LEGAL CLAIMS:
+   - Discuss Article 42 of the Constitution of Kenya (2010) ONLY when relevant to environmental rights, public health, government duties, civic action, or pollution.
+   - DO NOT force Article 42 or legal rights into purely technical, physical, or unrelated scientific questions (such as how solar panels generate electricity, how drought affects crop biology, or heatstroke physiology).
+   - When discussing Article 42, cite the authentic official text:
+     "Constitution of Kenya 2010, Article 42: Every person has the right to a clean and healthy environment, which includes the right—(a) to have the environment protected for the benefit of present and future generations through legislative and other measures, particularly those contemplated in Article 69; and (b) to have obligations relating to the environment fulfilled under Article 70."
 
-  // 5. Sanitize conversation history (max 6 messages)
+4. ACCURACY & AUTHENTICITY:
+   - For public policies, cite the Kenya Climate Change Act 2016 (amended 2023), EMCA 1999, and NEMA standards.
+   - Never claim to have watched a video or read a video transcript unless the user explicitly provided transcript text in the conversation.
+   - For real-time daily weather forecasts or alerts, state the limitation: live hourly radar is not integrated; direct the learner to the official Kenya Meteorological Department (KMD) bulletins at meteo.go.ke.
+   - Maintain learner privacy: never reference or expose other users' data.`;
+
+  // 5. Sanitize conversation history (max 8 messages)
   const sanitizedHistory: ChatMessageContext[] = [];
-  const recentHistory = history.slice(-6);
+  const recentHistory = history.slice(-8);
   for (const h of recentHistory) {
     if (h.role === 'user' || h.role === 'assistant') {
       sanitizedHistory.push({
         role: h.role,
-        content: String(h.content).slice(0, 500)
+        content: String(h.content).slice(0, 1000)
       });
     }
   }
@@ -197,11 +194,12 @@ Nairobi Climate Curriculum Modules Reference:
     { role: 'user', content: trimmedMessage }
   ];
 
-  // 6. Invoke Online AI Provider with 22s timeout
+  // 6. Invoke Model Provider with 45s timeout
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 22000);
+  const timeoutId = setTimeout(() => controller.abort(), 45000);
 
   const groqKey = process.env.GROQ_API_KEY?.trim();
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
 
   try {
     let generatedContent = '';
@@ -209,7 +207,7 @@ Nairobi Climate Curriculum Modules Reference:
     let modelLabel = '';
 
     if (groqKey) {
-      // Primary: Groq Cloud API
+      // Primary configured provider: Groq Cloud API
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
         headers: {
@@ -219,7 +217,7 @@ Nairobi Climate Curriculum Modules Reference:
         body: JSON.stringify({
           model: GROQ_MODEL,
           messages: messagesPayload,
-          max_tokens: 800,
+          max_tokens: 900,
           temperature: 0.7
         }),
         signal: controller.signal
@@ -228,11 +226,11 @@ Nairobi Climate Curriculum Modules Reference:
       clearTimeout(timeoutId);
 
       if (response.status === 429) {
-        console.warn('Groq rate limit reached (HTTP 429). Falling back to local assistant.');
+        console.warn('Groq rate limit reached (HTTP 429).');
         return {
           answer: isSwahili
-            ? 'Kiwango cha mtandao kimefikiwa kwa muda. Msaidizi wa ndani (offline) anajibu maswali ya mtaala sasa.'
-            : 'Online rate limit reached. Local offline assistant is available for curriculum topics.',
+            ? 'Kiwango cha mtandao kimefikiwa kwa muda. Tafadhali subiri sekunde chache kabla ya kuuliza tena.'
+            : 'Online rate limit reached. Please wait a moment before trying again.',
           mode: 'offline',
           fallbackToOffline: true,
           error: 'Rate limit (HTTP 429)'
@@ -247,33 +245,78 @@ Nairobi Climate Curriculum Modules Reference:
       generatedContent = data.choices?.[0]?.message?.content?.trim() || '';
       sourceLabel = 'Climate Justice Nairobi (Groq Llama-3.1-8b)';
       modelLabel = GROQ_MODEL;
-    } else {
-      // Default: Free Online AI Endpoint (Pollinations prompt endpoint, zero key required)
-      const promptQuery = `${systemPrompt}\n\nLearner Query:\n${trimmedMessage}`;
-      const encodedPrompt = encodeURIComponent(promptQuery);
-      const url = `${FREE_ONLINE_API_URL}prompt/${encodedPrompt}`;
-
-      const response = await fetch(url, {
-        method: 'GET',
+    } else if (openaiKey) {
+      // Alternative configured provider: OpenAI
+      const response = await fetch(OPENAI_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: messagesPayload,
+          max_tokens: 900,
+          temperature: 0.7
+        }),
         signal: controller.signal
       });
 
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Free online AI provider returned status ${response.status}`);
+        throw new Error(`OpenAI API returned status ${response.status}`);
       }
 
-      generatedContent = (await response.text()).trim();
-      sourceLabel = 'Climate Justice Nairobi (Online AI)';
-      modelLabel = 'llama-3.1-8b (free-online)';
+      const data: any = await response.json();
+      generatedContent = data.choices?.[0]?.message?.content?.trim() || '';
+      sourceLabel = 'Climate Justice Nairobi (OpenAI gpt-4o-mini)';
+      modelLabel = 'gpt-4o-mini';
+    } else {
+      // Default Online Generative Engine via OpenAI-format POST endpoint
+      const response = await fetch(POLLINATIONS_AI_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'openai-fast',
+          messages: messagesPayload,
+          temperature: 0.7
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.status === 402 || response.status === 429) {
+        const errorText = await response.text().catch(() => '');
+        console.warn(`Online AI rate limit reached (HTTP ${response.status}):`, errorText);
+        return {
+          answer: isSwahili
+            ? 'Kiwango cha bure cha mtandao kimefikiwa kwa muda (kikomo cha sekunde 30). Tafadhali subiri sekunde chache kabla ya kuuliza swali linalofuata, au weka GROQ_API_KEY ya bure kwenye server/.env.'
+            : 'Online AI provider burst limit reached (free tier limit: 1 request every 30s). Please wait a few seconds before sending the follow-up, or configure a free GROQ_API_KEY in server/.env for unlimited continuous generation.',
+          mode: 'offline',
+          fallbackToOffline: true,
+          error: `Provider Rate Limit (HTTP ${response.status})`
+        };
+      }
+
+      if (!response.ok) {
+        throw new Error(`Online AI provider returned status ${response.status}`);
+      }
+
+      const data: any = await response.json();
+      generatedContent = data.choices?.[0]?.message?.content?.trim() || '';
+      sourceLabel = 'Climate Justice Nairobi (Generative Engine)';
+      modelLabel = 'gpt-oss (online generative engine)';
     }
 
     if (!generatedContent) {
       return {
         answer: isSwahili
-          ? 'Hakuna jibu lililopokelewa kutoka kwa mtandao. Msaidizi wa ndani anapatikana.'
-          : 'No response received from the online model. Local offline curriculum assistant is available.',
+          ? 'Hakuna jibu lililopokelewa kutoka kwa mtandao. Tafadhali jaribu tena.'
+          : 'No response received from the generative engine. Please try asking again.',
         mode: 'offline',
         fallbackToOffline: true
       };
@@ -288,11 +331,11 @@ Nairobi Climate Curriculum Modules Reference:
   } catch (err: any) {
     clearTimeout(timeoutId);
     const isTimeout = err.name === 'AbortError';
-    console.warn(`Online AI request failed (${isTimeout ? 'Timeout' : err.message}). Falling back to local offline.`);
+    console.warn(`Generative AI request failed (${isTimeout ? 'Timeout' : err.message}).`);
     return {
       answer: isSwahili
-        ? 'Muda wa kusubiri mtandao umekwisha au muunganisho haupatikani. Msaidizi wa ndani (offline) anajibu maswali ya mtaala.'
-        : 'Network timeout or connection unavailable. Local offline curriculum assistant is answering from local records.',
+        ? 'Muunganisho wa mtandao ulikatika au umechelewa. Tafadhali jaribu kuuliza swali lako tena.'
+        : 'The generative AI connection timed out or is temporarily unavailable. Please try asking your question again.',
       mode: 'offline',
       fallbackToOffline: true,
       error: isTimeout ? 'Timeout' : err.message

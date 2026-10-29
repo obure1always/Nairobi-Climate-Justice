@@ -4,22 +4,36 @@ import {
   Bot, 
   Send, 
   Volume2, 
-  VolumeX, 
   BookOpen, 
   Sparkles, 
   HelpCircle, 
-  RotateCcw,
-  CheckCircle2,
-  Square,
-  Globe2,
-  WifiOff,
-  Scale,
-  CloudRain,
-  Users2
+  RotateCcw, 
+  Square, 
+  Globe2, 
+  WifiOff, 
+  Sliders, 
+  Play, 
+  X, 
+  Volume1, 
+  Radio 
 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { searchClimateBuddy, type AssistantQueryResult } from '../lib/assistantEngine';
-import { speakText, stopSpeech, isSpeechSupported } from '../lib/speech';
+import MarkdownRenderer from './MarkdownRenderer';
+import { 
+  speakText, 
+  stopSpeech, 
+  isSpeechSupported, 
+  getAvailableVoices, 
+  getRankedVoices, 
+  getPreferredVoiceURI,
+  setPreferredVoiceURI,
+  getSpeechRate,
+  setSpeechRate,
+  cleanTextForSpeech,
+  type VoiceOption
+} from '../lib/speech';
+import { audioCoordinator } from '../lib/audioCoordinator';
 
 interface ChatMessage {
   id: string;
@@ -48,14 +62,69 @@ export default function ClimateBuddy() {
   );
   const [promptCategory, setPromptCategory] = useState<'all' | 'justice' | 'hazards' | 'action'>('all');
 
+  // Voice Settings & Natural Voice Customization
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
+  const [speechRate, setLocalSpeechRate] = useState<number>(0.93);
+  const [cloudTtsInfo, setCloudTtsInfo] = useState<{ available: boolean; provider: string; configuredVoice?: string; instructions: string } | null>(null);
+  const [isPlayingTestAudio, setIsPlayingTestAudio] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const cloudAudioElementRef = useRef<HTMLAudioElement | null>(null);
+
+  // Synchronize with Audio Coordinator to avoid overlapping playback
+  useEffect(() => {
+    const unsubscribe = audioCoordinator.subscribe((state) => {
+      if (!state.isPlaying) {
+        setSpeakingMessageId(null);
+        setIsPlayingTestAudio(false);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      stopSpeech();
+    };
+  }, []);
+
+  // Fetch available voices & cloud TTS status
+  useEffect(() => {
+    getAvailableVoices().then((voices) => {
+      const ranked = getRankedVoices(language, voices);
+      setAvailableVoices(ranked);
+
+      const savedURI = getPreferredVoiceURI();
+      if (savedURI && voices.some(v => v.voiceURI === savedURI)) {
+        setSelectedVoiceURI(savedURI);
+      } else if (ranked.length > 0) {
+        setSelectedVoiceURI(ranked[0].voice.voiceURI);
+      }
+    });
+
+    setLocalSpeechRate(getSpeechRate());
+
+    // Check optional cloud TTS status on server
+    fetch('/api/v1/assistant/tts/status')
+      .then(res => res.json())
+      .then(data => {
+        setCloudTtsInfo(data);
+      })
+      .catch(() => {
+        setCloudTtsInfo({
+          available: false,
+          provider: 'Local Enhanced Web Speech API (Client-side)',
+          instructions: 'Offline mode active.'
+        });
+      });
+  }, [language]);
 
   // Check backend online status
   useEffect(() => {
     const checkOnlineStatus = async () => {
       try {
-        const res = await fetch('http://localhost:3001/api/v1/assistant/status');
+        const res = await fetch('/api/v1/assistant/status');
         if (res.ok) {
           const data = await res.json();
           setOnlineAvailable(Boolean(data.onlineAvailable));
@@ -148,6 +217,10 @@ export default function ClimateBuddy() {
     const query = (textToSend || inputQuery).trim();
     if (!query || isLoading) return;
 
+    // Halt any playing speech when a new query is submitted
+    stopSpeech();
+    setSpeakingMessageId(null);
+
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       sender: 'user',
@@ -170,7 +243,7 @@ export default function ClimateBuddy() {
           content: m.text
         }));
 
-        const res = await fetch('http://localhost:3001/api/v1/assistant/chat', {
+        const res = await fetch('/api/v1/assistant/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -238,25 +311,65 @@ export default function ClimateBuddy() {
     }
   };
 
-  const handleSpeak = (msgId: string, text: string) => {
+  const handleSpeak = async (msgId: string, text: string) => {
+    // If clicking on already-playing message, stop it
     if (speakingMessageId === msgId) {
       stopSpeech();
       setSpeakingMessageId(null);
       return;
     }
 
+    // Stop any existing audio immediately to prevent overlap
     stopSpeech();
     setSpeakingMessageId(msgId);
     setVoiceNotice(null);
 
-    // Clean markdown asterisks and brackets before speech
-    const cleanSpeechText = text.replace(/[*_#`[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
+    // Clean text to avoid speaking markdown symbols, hashtags, asterisks, tables, and links
+    const speechCleanedText = cleanTextForSpeech(text, language);
 
+    // 1. Check if cloud neural TTS is available on server
+    if (cloudTtsInfo?.available) {
+      try {
+        const res = await fetch('/api/v1/assistant/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: speechCleanedText, language })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.audioBase64) {
+            audioCoordinator.requestPlayback(msgId, 'cloud-tts');
+            const audio = new Audio(`data:audio/mp3;base64,${data.audioBase64}`);
+            cloudAudioElementRef.current = audio;
+            audioCoordinator.registerAudioElement(audio);
+
+            audio.onended = () => {
+              audioCoordinator.releasePlayback(msgId);
+              setSpeakingMessageId(null);
+            };
+
+            audio.onerror = () => {
+              audioCoordinator.releasePlayback(msgId);
+              setSpeakingMessageId(null);
+            };
+
+            await audio.play();
+            return;
+          }
+        }
+      } catch {
+        // Fall back cleanly to client browser speech
+      }
+    }
+
+    // 2. Client-side Enhanced Natural Web Speech Synthesis
     speakText(
-      cleanSpeechText,
+      speechCleanedText,
       language,
-      1.0,
+      speechRate,
       {
+        sourceId: msgId,
         onStart: () => setSpeakingMessageId(msgId),
         onEnd: () => setSpeakingMessageId(null),
         onError: (err) => {
@@ -266,6 +379,41 @@ export default function ClimateBuddy() {
         onVoiceNotice: (notice) => setVoiceNotice(notice)
       }
     );
+  };
+
+  const handlePlayVoiceSample = () => {
+    if (isPlayingTestAudio) {
+      stopSpeech();
+      setIsPlayingTestAudio(false);
+      return;
+    }
+
+    setIsPlayingTestAudio(true);
+    const sampleText = isSwahili
+      ? 'Hujambo! Hii ni sauti asilia ya Climate Buddy kwa ajili ya haki ya tabianchi na mafunzo Nairobi.'
+      : 'Hello! This is Climate Buddy’s clear natural voice for Nairobi climate justice and adaptation guidance.';
+
+    speakText(
+      sampleText,
+      language,
+      speechRate,
+      {
+        sourceId: 'voice-sample',
+        onStart: () => setIsPlayingTestAudio(true),
+        onEnd: () => setIsPlayingTestAudio(false),
+        onError: () => setIsPlayingTestAudio(false)
+      }
+    );
+  };
+
+  const handleVoiceChange = (uri: string) => {
+    setSelectedVoiceURI(uri);
+    setPreferredVoiceURI(uri);
+  };
+
+  const handleRateChange = (rate: number) => {
+    setLocalSpeechRate(rate);
+    setSpeechRate(rate);
   };
 
   const handleResetChat = () => {
@@ -278,7 +426,7 @@ export default function ClimateBuddy() {
 
     setMessages([
       {
-        id: `welcome-${Date.now()}`,
+        id: 'welcome-msg-reset',
         sender: 'assistant',
         text: welcomeText,
         mode: isOnlineActive ? 'online' : 'offline',
@@ -288,13 +436,19 @@ export default function ClimateBuddy() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-4 md:p-6 pb-24">
-      {/* Assistant Card Header */}
-      <div className="bg-white rounded-organic border border-gray-200 shadow-natural p-5 mb-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div className="p-4 sm:p-6 md:p-8 pb-28 max-w-4xl mx-auto flex flex-col min-h-screen">
+      {/* Header Panel */}
+      <div className="bg-white rounded-organic border border-gray-200 shadow-natural p-5 md:p-6 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-forest-green text-white flex items-center justify-center shadow-md">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-forest-green to-emerald-500 text-white flex items-center justify-center shadow-md relative">
               <Bot className="w-6 h-6" />
+              {speakingMessageId && (
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+              )}
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -303,20 +457,26 @@ export default function ClimateBuddy() {
                   <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                     <Globe2 className="w-3 h-3 text-emerald-600" />
-                    {isSwahili ? 'Akili ya Mtandaoni (Haki ya Tabianchi)' : 'Online AI (Climate Justice Focused)'}
+                    {isSwahili ? 'Akili ya Mtandaoni' : 'Online AI'}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
                     <WifiOff className="w-3 h-3 text-blue-600" />
-                    {isSwahili ? 'Msaidizi wa Ndani (Mtaala)' : 'Offline Mode (Local Curriculum)'}
+                    {isSwahili ? 'Msaidizi wa Ndani' : 'Offline Mode'}
                   </span>
                 )}
+
+                {/* Natural Voice Active Indicator */}
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-forest-green border border-emerald-200">
+                  <Volume1 className="w-3 h-3" />
+                  {isSwahili ? 'Sauti Asilia' : 'Natural Voice'}
+                </span>
               </div>
               <p className="text-xs text-gray-500 mt-0.5">
                 {isOnlineActive
                   ? (isSwahili 
-                      ? `Mtandaoni: Msaidizi anayelenga Haki ya Tabianchi Nairobi • ${providerInfo?.model || 'llama-3.1-8b'}`
-                      : `Online: Nairobi Climate Justice AI Specialist • ${providerInfo?.model || 'llama-3.1-8b'}`)
+                      ? `Mtandaoni: Msaidizi wa Haki ya Tabianchi • ${providerInfo?.model || 'llama-3.1-8b'}`
+                      : `Online: Nairobi Climate Justice AI • ${providerInfo?.model || 'llama-3.1-8b'}`)
                   : (isSwahili 
                       ? 'Nje ya mtandao: Mtaala wa ndani wa Nairobi uliohifadhiwa bila mtandao • 100% Bure' 
                       : 'Offline: Local verified curriculum knowledge base • 100% Free & Fast')}
@@ -325,6 +485,17 @@ export default function ClimateBuddy() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap self-start sm:self-center">
+            {/* Voice Settings Button */}
+            <button
+              onClick={() => setVoiceSettingsOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 text-xs font-semibold text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors shadow-sm"
+              title={isSwahili ? 'Mipangilio ya Sauti' : 'Voice Settings'}
+              aria-label={isSwahili ? 'Mipangilio ya Sauti ya Climate Buddy' : 'Climate Buddy Voice Settings'}
+            >
+              <Sliders className="w-3.5 h-3.5 text-forest-green" />
+              <span>{isSwahili ? 'Sauti' : 'Voice'}</span>
+            </button>
+
             {onlineAvailable && isBrowserOnline && (
               <button
                 onClick={() => setForceOfflineMode(prev => !prev)}
@@ -338,12 +509,12 @@ export default function ClimateBuddy() {
                 {forceOfflineMode ? (
                   <>
                     <WifiOff className="w-3.5 h-3.5" />
-                    {isSwahili ? 'Badilisha kuwa Mtandaoni' : 'Switch to Online'}
+                    <span>{isSwahili ? 'Mtandaoni' : 'Online'}</span>
                   </>
                 ) : (
                   <>
                     <Globe2 className="w-3.5 h-3.5" />
-                    {isSwahili ? 'Jaribu Nje ya Mtandao' : 'Test Offline Mode'}
+                    <span>{isSwahili ? 'Nje ya Mtandao' : 'Offline'}</span>
                   </>
                 )}
               </button>
@@ -352,26 +523,165 @@ export default function ClimateBuddy() {
             <button
               onClick={handleResetChat}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-100 transition-colors"
+              aria-label={isSwahili ? 'Anza upya mazungumzo' : 'Reset chat'}
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              {isSwahili ? 'Anza Upya' : 'Clear Chat'}
+              <span>{isSwahili ? 'Safisha' : 'Clear'}</span>
             </button>
           </div>
         </div>
 
         {voiceNotice && (
-          <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
+          <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2 animate-in fade-in">
             <HelpCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="flex-grow">{voiceNotice}</div>
           </div>
         )}
       </div>
 
+      {/* Voice Settings Modal */}
+      {voiceSettingsOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="voice-settings-title"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-gray-100 space-y-5 animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-forest-green/10 text-forest-green flex items-center justify-center font-bold">
+                  <Sliders className="w-4 h-4" />
+                </div>
+                <h3 id="voice-settings-title" className="text-base font-bold text-gray-900">
+                  {isSwahili ? 'Mipangilio ya Sauti ya Buddy' : 'Climate Buddy Voice Settings'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setVoiceSettingsOpen(false)}
+                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Voice Selection Dropdown */}
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
+                {isSwahili ? 'Chagua Sauti (Iliyoboreshwa)' : 'Select Voice (Natural Scored)'}
+              </label>
+              <select
+                value={selectedVoiceURI}
+                onChange={(e) => handleVoiceChange(e.target.value)}
+                className="w-full text-xs font-medium bg-gray-50 border border-gray-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-forest-green text-gray-900"
+              >
+                {availableVoices.map((vo) => (
+                  <option key={vo.voice.voiceURI} value={vo.voice.voiceURI}>
+                    {vo.displayName} {vo.isNatural ? '★ Natural' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-500 mt-1.5 leading-relaxed">
+                {isSwahili
+                  ? 'Sauti asilia (Natural/Neural) huchaguliwa kwanza ili kuondoa sauti za mashine zilizopitwa na wakati.'
+                  : 'Modern neural/natural voices are scored first to eliminate robotic 90s synthesizers.'}
+              </p>
+            </div>
+
+            {/* Speaking Pace Slider */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  {isSwahili ? 'Kasi ya Kusoma' : 'Speaking Pace'}
+                </label>
+                <span className="text-xs font-bold text-forest-green">{speechRate}x</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-gray-400">0.8x</span>
+                <input
+                  type="range"
+                  min="0.75"
+                  max="1.25"
+                  step="0.05"
+                  value={speechRate}
+                  onChange={(e) => handleRateChange(parseFloat(e.target.value))}
+                  className="w-full accent-forest-green cursor-pointer"
+                />
+                <span className="text-[11px] text-gray-400">1.25x</span>
+              </div>
+              <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                <span>{isSwahili ? 'Taratibu' : 'Gentle'}</span>
+                <span className="text-forest-green font-bold">{isSwahili ? '0.93x (Inayopendekezwa)' : '0.93x (Recommended)'}</span>
+                <span>{isSwahili ? 'Haraka' : 'Fast'}</span>
+              </div>
+            </div>
+
+            {/* Cloud Neural Studio Voice Status & Credentials info */}
+            <div className="bg-emerald-50/70 border border-emerald-100 rounded-2xl p-3.5 text-xs text-emerald-950 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold flex items-center gap-1.5 text-forest-green">
+                  <Radio className="w-3.5 h-3.5" />
+                  {isSwahili ? 'Hali ya Sauti ya Cloud Studio' : 'Cloud Studio Voice Status'}
+                </span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  cloudTtsInfo?.available
+                    ? 'bg-emerald-200 text-emerald-900'
+                    : 'bg-white text-emerald-800 border border-emerald-200'
+                }`}>
+                  {cloudTtsInfo?.available ? 'Cloud Active' : 'Offline Natural Mode'}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                {cloudTtsInfo?.available
+                  ? `Sauti ya OpenAI ${cloudTtsInfo.configuredVoice} inafanya kazi kwa uwazi wa kiwango cha juu.`
+                  : isSwahili
+                    ? 'Kwa sasa inatumia sauti za asili za kivinjari bila gharama. Ili kuwezesha sauti ya studio ya OpenAI, weka OPENAI_API_KEY kwenye faili ya server/.env.'
+                    : 'Currently using zero-cost client natural synthesis. To enable studio-grade OpenAI audio, add OPENAI_API_KEY in server/.env.'}
+              </p>
+            </div>
+
+            {/* Test Voice Sample & Close */}
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                onClick={handlePlayVoiceSample}
+                className="flex-1 py-2.5 px-4 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-colors"
+              >
+                {isPlayingTestAudio ? (
+                  <>
+                    <Square className="w-3.5 h-3.5 fill-gray-800" />
+                    <span>{isSwahili ? 'Sitisha Sampuli' : 'Stop Sample'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-gray-800" />
+                    <span>{isSwahili ? 'Sikiliza Sampuli' : 'Play Voice Sample'}</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => setVoiceSettingsOpen(false)}
+                className="py-2.5 px-6 bg-forest-green hover:bg-forest-green/90 text-white rounded-xl font-bold text-xs transition-colors shadow-sm"
+              >
+                {isSwahili ? 'Hifadhi' : 'Done'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Chat Messages Container */}
-      <div className="bg-gray-50/80 rounded-organic border border-gray-200 shadow-inner p-4 md:p-6 min-h-[420px] max-h-[560px] overflow-y-auto space-y-4 mb-4">
+      <div 
+        className="bg-gray-50/80 rounded-organic border border-gray-200 shadow-inner p-4 md:p-6 min-h-[420px] max-h-[560px] overflow-y-auto space-y-4 mb-4"
+        role="log"
+        aria-live="polite"
+        aria-label={isSwahili ? 'Historia ya Mazungumzo' : 'Chat Conversation History'}
+      >
         {messages.map((msg) => {
           const isUser = msg.sender === 'user';
           const res = msg.result;
+          const isSpeakingThis = speakingMessageId === msg.id;
 
           return (
             <div
@@ -379,10 +689,12 @@ export default function ClimateBuddy() {
               className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`max-w-[85%] md:max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed shadow-sm ${
+                className={`max-w-[85%] md:max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed shadow-sm transition-all ${
                   isUser
                     ? 'bg-forest-green text-white rounded-br-none'
-                    : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
+                    : isSpeakingThis
+                      ? 'bg-white text-gray-900 border-2 border-forest-green rounded-bl-none shadow-md ring-2 ring-forest-green/10'
+                      : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
                 }`}
               >
                 {!isUser && res?.question && (
@@ -392,7 +704,13 @@ export default function ClimateBuddy() {
                   </div>
                 )}
 
-                <div className="whitespace-pre-wrap">{msg.text}</div>
+                {isUser ? (
+                  <div className="whitespace-pre-wrap">{msg.text}</div>
+                ) : (
+                  <div className="text-gray-900 leading-relaxed overflow-x-auto">
+                    <MarkdownRenderer content={msg.text} />
+                  </div>
+                )}
 
                 {/* Assistant Metadata (Source, Mode, Links, Listen) */}
                 {!isUser && (
@@ -418,17 +736,27 @@ export default function ClimateBuddy() {
                       {isSpeechSupported() && (
                         <button
                           onClick={() => handleSpeak(msg.id, msg.text)}
-                          className={`p-1.5 rounded-full transition-colors ${
-                            speakingMessageId === msg.id
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
+                            isSpeakingThis
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300 ring-2 ring-amber-400/20'
+                              : 'bg-gray-100 text-gray-700 hover:bg-forest-green/10 hover:text-forest-green'
                           }`}
-                          title={isSwahili ? 'Sikiliza jibu' : 'Listen to answer'}
+                          aria-label={isSpeakingThis ? (isSwahili ? 'Sitisha kusoma' : 'Stop audio') : (isSwahili ? 'Sikiliza kwa sauti asilia' : 'Listen with natural voice')}
                         >
-                          {speakingMessageId === msg.id ? (
-                            <VolumeX className="w-4 h-4" />
+                          {isSpeakingThis ? (
+                            <>
+                              <span className="flex gap-0.5 items-end h-3">
+                                <span className="w-0.5 h-3 bg-amber-700 animate-pulse"></span>
+                                <span className="w-0.5 h-2 bg-amber-700 animate-pulse delay-75"></span>
+                                <span className="w-0.5 h-3 bg-amber-700 animate-pulse delay-150"></span>
+                              </span>
+                              <span className="text-[11px] font-bold">{isSwahili ? 'Sitisha' : 'Stop'}</span>
+                            </>
                           ) : (
-                            <Volume2 className="w-4 h-4" />
+                            <>
+                              <Volume2 className="w-3.5 h-3.5 text-forest-green" />
+                              <span className="text-[11px]">{isSwahili ? 'Sikiliza' : 'Listen'}</span>
+                            </>
                           )}
                         </button>
                       )}
@@ -442,6 +770,29 @@ export default function ClimateBuddy() {
                           {res.moduleTitle || (isSwahili ? 'Soma Moduli' : 'View Module')}
                         </Link>
                       )}
+
+                      <button
+                        onClick={async () => {
+                          try {
+                            await fetch('/api/v1/assistant/report-error', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                query: res?.question || 'Learner question',
+                                responseText: msg.text,
+                                feedback: 'Learner reported factual discrepancy'
+                              })
+                            });
+                            alert(isSwahili ? 'Ujumbe umewasilishwa kwa wakufunzi kwa ukaguzi.' : 'Reported to climate instructors for review and correction.');
+                          } catch {
+                            alert('Could not submit report.');
+                          }
+                        }}
+                        className="text-[11px] text-gray-400 hover:text-amber-700 underline transition ml-1"
+                        title="Report potential inaccuracy to course instructors"
+                      >
+                        {isSwahili ? 'Ripoti Hitilafu' : 'Report Issue'}
+                      </button>
                     </div>
                   </div>
                 )}
@@ -464,134 +815,93 @@ export default function ClimateBuddy() {
                   ))}
                 </div>
               )}
-
-              <span className="text-[10px] text-gray-400 mt-1 px-1">
-                {msg.timestamp}
-              </span>
             </div>
           );
         })}
 
-        {/* Loading Indicator */}
         {isLoading && (
-          <div className="flex items-start gap-2">
-            <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-none p-3.5 shadow-sm text-xs text-gray-600 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-forest-green animate-ping"></span>
-              <span>{isSwahili ? 'Climate Buddy anatafakari jibu...' : 'Climate Buddy is thinking...'}</span>
-              <button
-                onClick={handleStopRequest}
-                className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 hover:bg-red-50 hover:text-red-700 text-gray-600 rounded text-[11px] transition-colors"
-              >
-                <Square className="w-3 h-3" />
-                {isSwahili ? 'Sitisha' : 'Stop'}
-              </button>
-            </div>
+          <div className="flex items-center gap-2 text-gray-500 text-xs italic bg-white p-3 rounded-2xl w-fit border border-gray-200">
+            <div className="w-2 h-2 rounded-full bg-forest-green animate-ping" />
+            <span>{isSwahili ? 'Climate Buddy anatafakari jibu...' : 'Climate Buddy is thinking...'}</span>
+            <button
+              onClick={handleStopRequest}
+              className="ml-2 text-red-600 hover:text-red-700 font-bold not-italic"
+            >
+              {isSwahili ? 'Acha' : 'Cancel'}
+            </button>
           </div>
         )}
 
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quick Prompts Carousel if conversation just started */}
-      {messages.length <= 2 && (
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-              {isSwahili ? 'Maswali ya Kuanzia:' : 'Suggested Questions to Ask:'}
-            </p>
-            <div className="flex items-center gap-1 text-[11px] flex-wrap">
-              <button
-                onClick={() => setPromptCategory('all')}
-                className={`px-2 py-0.5 rounded-full ${promptCategory === 'all' ? 'bg-forest-green text-white font-bold' : 'text-gray-600 hover:bg-gray-100'}`}
-              >
-                {isSwahili ? 'Yote' : 'All'}
-              </button>
-              <button
-                onClick={() => setPromptCategory('justice')}
-                className={`px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${promptCategory === 'justice' ? 'bg-forest-green text-white font-bold' : 'text-gray-600 hover:bg-gray-100'}`}
-              >
-                <Scale className="w-3 h-3" />
-                {isSwahili ? 'Haki & Katiba' : 'Justice & Rights'}
-              </button>
-              <button
-                onClick={() => setPromptCategory('hazards')}
-                className={`px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${promptCategory === 'hazards' ? 'bg-forest-green text-white font-bold' : 'text-gray-600 hover:bg-gray-100'}`}
-              >
-                <CloudRain className="w-3 h-3" />
-                {isSwahili ? 'Majanga ya Mjini' : 'Urban Hazards'}
-              </button>
-              <button
-                onClick={() => setPromptCategory('action')}
-                className={`px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${promptCategory === 'action' ? 'bg-forest-green text-white font-bold' : 'text-gray-600 hover:bg-gray-100'}`}
-              >
-                <Users2 className="w-3 h-3" />
-                {isSwahili ? 'Hatua za Jamii' : 'Community Action'}
-              </button>
-            </div>
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
-            {filteredPrompts.map((prompt, i) => (
-              <button
-                key={i}
-                onClick={() => handleSend(prompt.text)}
-                className="px-3.5 py-2 bg-white hover:bg-forest-green/10 hover:border-forest-green border border-gray-200 rounded-full text-xs font-medium text-gray-800 transition-all shrink-0 shadow-sm text-left max-w-xs truncate"
-              >
-                {prompt.text}
-              </button>
-            ))}
-          </div>
+      {/* Quick Prompts Filter Bar */}
+      <div className="mb-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+          <span className="font-bold text-gray-400 uppercase text-[10px] shrink-0 mr-1">
+            {isSwahili ? 'Mada:' : 'Topics:'}
+          </span>
+          {[
+            { id: 'all', label: isSwahili ? 'Yote' : 'All' },
+            { id: 'justice', label: isSwahili ? 'Haki za Kikatiba' : 'Rights & Justice' },
+            { id: 'hazards', label: isSwahili ? 'Mafuriko na Joto' : 'Floods & Heat' },
+            { id: 'action', label: isSwahili ? 'Hatua za Kiraia' : 'Civic Action' }
+          ].map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => setPromptCategory(cat.id as any)}
+              className={`px-2.5 py-1 rounded-full whitespace-nowrap font-medium transition-colors ${
+                promptCategory === cat.id
+                  ? 'bg-forest-green text-white font-bold'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
+              }`}
+            >
+              {cat.label}
+            </button>
+          ))}
         </div>
-      )}
 
-      {/* Input Box */}
+        <div className="flex gap-2 overflow-x-auto py-2 no-scrollbar">
+          {filteredPrompts.slice(0, 4).map((p, i) => (
+            <button
+              key={i}
+              onClick={() => handleSend(p.text)}
+              className="px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs text-gray-700 hover:border-forest-green hover:text-forest-green whitespace-nowrap transition-colors shrink-0 shadow-sm"
+            >
+              {p.text}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Input Message Form */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
           handleSend();
         }}
-        className="flex items-center gap-2 bg-white rounded-full border border-gray-300 p-1.5 shadow-natural focus-within:border-forest-green focus-within:ring-4 focus-within:ring-forest-green/20 transition-all"
+        className="flex items-center gap-2 mt-auto"
       >
         <input
           type="text"
-          id="climate-buddy-input"
           value={inputQuery}
           onChange={(e) => setInputQuery(e.target.value)}
           placeholder={
-            isSwahili 
-              ? 'Uliza swali kuhusu haki ya tabianchi, Katiba, mafuriko, joto la mabati, hatua za jamii...' 
-              : 'Ask about climate justice, Article 42, flood safety, mabati heat, greenwashing, or community action...'
+            isSwahili
+              ? 'Uliza swali kuhusu haki za tabianchi, mafuriko, au joto Nairobi...'
+              : 'Ask a question about climate justice, flood safety, heat in Nairobi...'
           }
-          className="flex-grow px-4 py-2.5 bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none"
+          className="flex-1 bg-white border border-gray-300 rounded-2xl px-4 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest-green shadow-sm"
         />
-        {isLoading ? (
-          <button
-            type="button"
-            onClick={handleStopRequest}
-            className="w-10 h-10 rounded-full bg-amber-600 hover:bg-amber-700 text-white flex items-center justify-center transition-colors shadow-sm shrink-0"
-            title={isSwahili ? 'Sitisha ombi' : 'Stop request'}
-          >
-            <Square className="w-4 h-4" />
-          </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={!inputQuery.trim()}
-            className="w-10 h-10 rounded-full bg-forest-green disabled:bg-gray-300 text-white flex items-center justify-center transition-colors shadow-sm shrink-0"
-            title={isSwahili ? 'Tuma swali' : 'Send question'}
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        )}
+        <button
+          type="submit"
+          disabled={!inputQuery.trim() || isLoading}
+          className="bg-forest-green hover:bg-forest-green/90 disabled:opacity-40 text-white p-3.5 rounded-2xl shadow-md transition-all flex items-center justify-center shrink-0"
+          aria-label={isSwahili ? 'Tuma ujumbe' : 'Send question'}
+        >
+          <Send className="w-5 h-5" />
+        </button>
       </form>
-
-      {/* Disclaimer Notice */}
-      <p className="text-center text-[11px] text-gray-500 mt-3 flex items-center justify-center gap-1.5">
-        <CheckCircle2 className="w-3.5 h-3.5 text-forest-green" />
-        {isSwahili 
-          ? 'Majibu ya AI yanaweza kuwa na hitilafu. Taarifa za mtaala wa ndani na miongozo rasmi hupewa kipaumbele.' 
-          : 'AI-generated answers may contain inaccuracies. Official guidelines and local curriculum facts are prioritized.'}
-      </p>
     </div>
   );
 }
