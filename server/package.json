@@ -8,7 +8,7 @@
     "test": "cross-env NODE_ENV=test jest"
   },
   "keywords": [],
-  "author": "John Obure <j.obure1@alustudent.com>",
+  "author": "John Obure",
   "license": "ISC",
   "description": "",
   "dependencies": {

@@ -7,3 +7,5 @@ build/
 .agents/
 *.mp4
 coverage/
+scratch/
+*.local

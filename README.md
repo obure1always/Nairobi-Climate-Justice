@@ -112,12 +112,38 @@ npm run test
 
 ---
 
+## 🎙️ Voice & Audio System (Climate Buddy)
+
+Climate Buddy features a humanized voice system designed for clear learning in English and Kiswahili:
+- **Audio Coordinator**: A global singleton controller (`audioCoordinator.ts`) guarantees that only one audio source (speech narration, video audio, or assistant response) plays at any time, preventing overlapping sound.
+- **Natural Voice Selection**: Prioritizes modern, natural/neural voices available on the user's OS and browser (Google Natural, Apple Siri/Enhanced Samantha, Microsoft Neural) and filters out obsolete robotic legacy synthesizers.
+- **Sentence Chunking & Acronym Expansion**: Eliminates the Chromium 15-second speech freeze bug while expanding technical acronyms (e.g., `UNFCCC`, `NEMA`, `CIDP`, `CO2`) for natural spoken diction.
+- **Optional Studio Cloud Voice (OpenAI / ElevenLabs)**: By default, the application runs 100% free and offline using client-side synthesis. If you wish to enable studio-grade cloud neural audio, configure the following in [`server/.env`](file:///Users/johnobure/Nairobi-Climate-Justice/server/.env):
+  ```env
+  OPENAI_API_KEY=your_openai_api_key_here
+  OPENAI_TTS_VOICE=nova
+  ```
+
+---
+
+## 📺 Climate Change Awareness Hub
+
+A dedicated video awareness section (`/awareness`) featuring verified documentation from credible humanitarian and scientific authorities:
+- **Verified Sources**: BBC News Africa, UNEP (Gigiri, Nairobi), Kenya Red Cross Society, DW Planet A, Al Jazeera, and Fridays For Future Kenya.
+- **Mobile-Friendly & Safe Bandwidth**: `autoplay=0` disabled by default, lazy-loaded responsive 16:9 containers, and direct external watch fallbacks.
+- **Practical Community Action**: Every video features tangible community adaptation solutions (Go-Bag preparedness, sack gardening, roof insulation barriers, and riparian protection).
+
+---
+
 ## Project Structure
 - `/client`: The React frontend application.
-  - `/src/components`: Reusable UI components (QuizEngine, AssessmentView, etc.).
-  - `/src/contexts`: React Contexts (ProgressContext for offline data sync).
-  - `/src/data`: Curriculum content and quiz data.
+  - `/src/components`: UI components (ClimateBuddy, LessonView, Navigation, GuestTransferModal, etc.).
+  - `/src/lib`: Speech synthesis engine, global audio coordinator, and local assistant retrieval engine.
+  - `/src/pages`: Awareness hub, curriculum viewer, decision scenarios, action guides, and glossary.
+  - `/src/data`: Curriculum content, awareness videos, FAQs, and validation test suites.
 - `/server`: The Express backend API.
   - `/src/models`: Sequelize ORM models.
-  - `/src/index.ts`: Main server entry point and API route definitions.
-  - `/tests`: API integration tests.
+  - `/src/services`: Auth service, conversational grounding assistant, and TTS service.
+  - `/src/index.ts`: API route definitions.
+  - `/tests`: Test suites for auth, assistant, API, and TTS.
+

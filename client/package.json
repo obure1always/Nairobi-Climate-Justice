@@ -2,7 +2,7 @@
   "name": "client",
   "private": true,
   "version": "0.0.0",
-  "author": "John Obure <j.obure1@alustudent.com>",
+  "author": "John Obure",
   "type": "module",
   "scripts": {
     "dev": "vite",
