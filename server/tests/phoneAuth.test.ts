@@ -46,7 +46,7 @@ describe('Phone & Password Authentication Service', () => {
   });
 
   describe('Account Registration Flow', () => {
-    it('registers a new user with name, phone, and password, keeping phoneVerified: false', async () => {
+    it('registers a new user with name, phone, and password, keeping phoneVerified: false without SMS code', async () => {
       const regRes = await registerWithPhone(
         '+254',
         '0712345678',
@@ -61,7 +61,7 @@ describe('Phone & Password Authentication Service', () => {
       expect(regRes.user.phone).toBe('+254712345678');
       expect(regRes.user.name).toBe('Amina Wanjiku');
       expect(regRes.user.email).toBe('backup.amina@example.org');
-      expect(regRes.user.phoneVerified).toBe(false); // Strictly unverified
+      expect(regRes.user.phoneVerified).toBe(false);
 
       // Verify database persistence
       const dbUser = await User.findOne({ where: { phone: '+254712345678' } });
@@ -112,7 +112,7 @@ describe('Phone & Password Authentication Service', () => {
       expect(loginRes.success).toBe(true);
       expect(loginRes.token).toBeDefined();
       expect(loginRes.user.phone).toBe('+254712345678');
-      expect(loginRes.user.phoneVerified).toBe(false); // Remained unverified
+      expect(loginRes.user.phoneVerified).toBe(false);
 
       // Session is valid
       const sessionUser = await validateSession(loginRes.token!);

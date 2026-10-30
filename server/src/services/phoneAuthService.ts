@@ -114,8 +114,8 @@ export function isValidPhoneNumber(countryCode: string, nationalNumber: string):
 }
 
 /**
- * Registers a new user account with phone number, password, and name.
- * Phone ownership is stored as unverified. No SMS codes are sent.
+ * Registers an account with phone number and password without any SMS or OTP.
+ * Passwords are securely hashed with scrypt.
  */
 export async function registerWithPhone(
   countryCode: string,
@@ -138,7 +138,7 @@ export async function registerWithPhone(
   }
 
   if (!name || name.trim().length === 0) {
-    return { success: false, error: 'Full name or learner name is required.' };
+    return { success: false, error: 'Full name or learner nickname is required.' };
   }
 
   if (!password || password.length < 8) {
@@ -175,10 +175,10 @@ export async function registerWithPhone(
   const { hash: passwordHash, salt: passwordSalt } = hashPassword(password);
   const { code: recoveryCode, hash: recoveryCodeHash, salt: recoveryCodeSalt } = generateRecoveryCode();
 
-  // Create persistent user record with phoneVerified explicitly false
+  // Create persistent user record
   const user = await User.create({
     phone,
-    phoneVerified: false, // Explicitly false: phone ownership is unverified
+    phoneVerified: false,
     email: cleanRecoveryEmail,
     name: name.trim(),
     passwordHash,
@@ -189,7 +189,7 @@ export async function registerWithPhone(
     role: 'learner'
   });
 
-  // Create session
+  // Create active session
   const token = await createSession(user.id);
 
   return {
@@ -269,7 +269,7 @@ export async function loginWithPhone(
     user: {
       id: user.id,
       phone: user.phone,
-      phoneVerified: false,
+      phoneVerified: user.phoneVerified,
       email: user.email,
       name: user.name,
       displayName: user.name,

@@ -30,7 +30,13 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (email: string, password: string, confirmPassword?: string, name?: string) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
   loginWithGoogle: (idToken: string) => Promise<{ success: boolean; error?: string }>;
-  registerWithPhone: (countryCode: string, nationalNumber: string, password: string, name: string, recoveryEmail?: string) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  registerWithPhone: (
+    countryCode: string, 
+    nationalNumber: string, 
+    password: string, 
+    name: string, 
+    recoveryEmail?: string
+  ) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
   loginWithPhone: (countryCode: string, nationalNumber: string, password: string) => Promise<{ success: boolean; error?: string }>;
   updateProfile: (data: { displayName?: string; name?: string; avatarUrl?: string; bio?: string }) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
   logout: () => Promise<void>;
@@ -43,7 +49,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_BASE = '/api/v1';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -54,7 +60,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [error, setError] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState<boolean>(false);
 
-  // Initialize guest ID and check existing session
+  const saveSession = (authenticatedUser: AuthUser, sessionToken: string) => {
+    setUser(authenticatedUser);
+    setToken(sessionToken);
+    setIsGuest(false);
+    localStorage.setItem('climate_justice_token', sessionToken);
+    sessionStorage.setItem('climate_justice_token', sessionToken);
+    localStorage.setItem('climate_justice_is_guest', 'false');
+  };
+
+  const clearSession = () => {
+    setUser(null);
+    setToken(null);
+    setIsGuest(true);
+    localStorage.removeItem('climate_justice_token');
+    sessionStorage.removeItem('climate_justice_token');
+    localStorage.setItem('climate_justice_is_guest', 'true');
+  };
+
+  // Restore authentic session across page refreshes
   useEffect(() => {
     let existingGuestId = localStorage.getItem('climate_justice_guest_id');
     if (!existingGuestId) {
@@ -64,7 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setGuestId(existingGuestId);
 
     const initAuth = async () => {
-      const savedToken = sessionStorage.getItem('climate_justice_token') || localStorage.getItem('climate_justice_token');
+      const savedToken = localStorage.getItem('climate_justice_token') || sessionStorage.getItem('climate_justice_token');
       if (savedToken) {
         try {
           const res = await fetch(`${API_BASE}/auth/me`, {
@@ -73,21 +97,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (res.ok) {
             const data = await res.json();
             if (data.user) {
-              setUser(data.user);
-              setToken(savedToken);
-              setIsGuest(false);
+              saveSession(data.user, savedToken);
               setIsLoading(false);
               return;
             }
+          } else if (res.status === 401) {
+            clearSession();
           }
         } catch {
-          // Network offline: retain offline guest mode
+          // Network offline: retain token in storage but stop loading
         }
+      } else {
+        clearSession();
       }
 
-      // Default or saved guest status
-      const guestFlag = localStorage.getItem('climate_justice_is_guest');
-      setIsGuest(guestFlag !== 'false');
       setIsLoading(false);
     };
 
@@ -107,10 +130,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const continueAsGuest = () => {
-    setIsGuest(true);
-    localStorage.setItem('climate_justice_is_guest', 'true');
-    setUser(null);
-    setToken(null);
+    clearSession();
   };
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
@@ -121,21 +141,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          success: false,
+          error: `Backend API server unreachable (received status ${res.status}). Verify API server is listening on port 3001.`
+        };
+      }
       const data = await res.json();
       if (!res.ok) {
         return { success: false, error: data.error || 'Invalid email or password' };
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      setIsGuest(false);
-      localStorage.setItem('climate_justice_is_guest', 'false');
-      sessionStorage.setItem('climate_justice_token', data.token);
-
+      saveSession(data.user, data.token);
       await checkForLocalProgress();
       return { success: true };
-    } catch {
-      return { success: false, error: 'Cannot connect to authentication server. Please check your connection or continue as guest.' };
+    } catch (err: any) {
+      return { 
+        success: false, 
+        error: err?.message || 'Cannot connect to authentication server. Please check your backend connection.' 
+      };
     }
   };
 
@@ -152,21 +177,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, confirmPassword, name, privacyConsent: true })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          success: false,
+          error: `Backend API server unreachable (received status ${res.status}). Verify API server is listening on port 3001.`
+        };
+      }
       const data = await res.json();
       if (!res.ok) {
         return { success: false, error: data.error || 'Failed to create account' };
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      setIsGuest(false);
-      localStorage.setItem('climate_justice_is_guest', 'false');
-      sessionStorage.setItem('climate_justice_token', data.token);
-
+      saveSession(data.user, data.token);
       await checkForLocalProgress();
       return { success: true, recoveryCode: data.recoveryCode };
-    } catch {
-      return { success: false, error: 'Cannot connect to registration server. Offline guest mode is available.' };
+    } catch (err: any) {
+      return { 
+        success: false, 
+        error: err?.message || 'Cannot connect to registration server. Please check your network connection.' 
+      };
     }
   };
 
@@ -183,12 +213,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: data.error || 'Google authentication failed' };
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      setIsGuest(false);
-      localStorage.setItem('climate_justice_is_guest', 'false');
-      sessionStorage.setItem('climate_justice_token', data.token);
-
+      saveSession(data.user, data.token);
       await checkForLocalProgress();
       return { success: true };
     } catch {
@@ -210,21 +235,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ countryCode, nationalNumber, password, name, recoveryEmail })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          success: false,
+          error: `Backend API server unreachable (received status ${res.status}). Verify API server is listening on port 3001.`
+        };
+      }
       const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.error || 'Failed to create account with phone' };
+        return { 
+          success: false, 
+          error: data.error || 'Failed to create account with phone' 
+        };
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      setIsGuest(false);
-      localStorage.setItem('climate_justice_is_guest', 'false');
-      sessionStorage.setItem('climate_justice_token', data.token);
-
+      saveSession(data.user, data.token);
       await checkForLocalProgress();
       return { success: true, recoveryCode: data.recoveryCode };
-    } catch {
-      return { success: false, error: 'Cannot connect to authentication service. Please check your network connection.' };
+    } catch (err: any) {
+      return { 
+        success: false, 
+        error: err?.message || 'Cannot connect to authentication service. Please check your network connection.' 
+      };
     }
   };
 
@@ -240,21 +273,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ countryCode, nationalNumber, password })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          success: false,
+          error: `Backend API server unreachable (received status ${res.status}). Verify API server is listening on port 3001.`
+        };
+      }
       const data = await res.json();
       if (!res.ok) {
         return { success: false, error: data.error || 'Invalid phone number or password' };
       }
 
-      setUser(data.user);
-      setToken(data.token);
-      setIsGuest(false);
-      localStorage.setItem('climate_justice_is_guest', 'false');
-      sessionStorage.setItem('climate_justice_token', data.token);
-
+      saveSession(data.user, data.token);
       await checkForLocalProgress();
       return { success: true };
-    } catch {
-      return { success: false, error: 'Network error during phone login. Please try again.' };
+    } catch (err: any) {
+      return { 
+        success: false, 
+        error: err?.message || 'Network error during phone login. Please try again.' 
+      };
     }
   };
 
@@ -291,12 +329,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Logout local cleanup anyway
       }
     }
-    sessionStorage.removeItem('climate_justice_token');
-    localStorage.removeItem('climate_justice_token');
-    setUser(null);
-    setToken(null);
-    setIsGuest(true);
-    localStorage.setItem('climate_justice_is_guest', 'true');
+    clearSession();
     setShowTransferModal(false);
   };
 
@@ -354,7 +387,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch(`${API_BASE}/auth/regenerate-recovery-code`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
       });
       const data = await res.json();
       if (!res.ok) {
@@ -362,7 +398,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       return { success: true, recoveryCode: data.recoveryCode };
     } catch {
-      return { success: false, error: 'Network error occurred while generating code' };
+      return { success: false, error: 'Network error occurred while regenerating recovery code' };
     }
   };
 
@@ -371,7 +407,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch(`${API_BASE}/auth/account`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
       });
       const data = await res.json();
       if (!res.ok) {
@@ -380,7 +419,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await logout();
       return { success: true };
     } catch {
-      return { success: false, error: 'Network error occurred during account deletion' };
+      return { success: false, error: 'Network error occurred while deleting account' };
     }
   };
 
@@ -416,7 +455,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;

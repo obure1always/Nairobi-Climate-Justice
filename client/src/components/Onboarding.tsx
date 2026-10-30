@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -9,6 +9,7 @@ export default function Onboarding() {
   const { language, setLanguage } = useLanguage();
   const { updateSettings } = useProgress();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleLanguageSelect = (lang: 'en' | 'sw') => {
     setLanguage(lang);
@@ -37,7 +38,8 @@ export default function Onboarding() {
     }
     
     await updateSettings({ onboardingComplete: true, language });
-    navigate('/');
+    const from = (location.state as any)?.from || '/';
+    navigate(from, { replace: true });
   };
 
   const isSwahili = language === 'sw';

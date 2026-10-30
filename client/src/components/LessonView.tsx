@@ -62,7 +62,7 @@ export default function LessonView() {
   const location = useLocation();
   const { language } = useLanguage();
   const { progress, updateLessonProgress, completeModule, unlockAchievement } = useProgress();
-  const { user, isGuest } = useAuth();
+  const { user } = useAuth();
   
   const isSwahili = language === 'sw';
   const currentModules = modules[language];
@@ -140,12 +140,12 @@ export default function LessonView() {
   const [isSubmittingQuestion, setIsSubmittingQuestion] = useState(false);
   const [questionNotice, setQuestionNotice] = useState<string | null>(null);
 
-  // Access check: supervisor feedback requires login before learning starts
+  // Access check: requires authentic account before learning starts
   useEffect(() => {
-    if (!user && !isGuest) {
+    if (!user) {
       navigate('/login', { state: { from: location.pathname } });
     }
-  }, [user, isGuest, navigate, location.pathname]);
+  }, [user, navigate, location.pathname]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
