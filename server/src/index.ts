@@ -36,6 +36,7 @@ import {
   registerWithPhone, 
   loginWithPhone, 
   normalizePhoneNumber,
+  isValidPhoneNumber,
   SUPPORTED_COUNTRY_CODES 
 } from './services/phoneAuthService';
 import { 
@@ -111,13 +112,23 @@ const requireRoles = (allowedRoles: string[]) => {
 };
 
 // Admin Authorization Middleware for research dataset export
-const requireAdminAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+const requireAdminAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: Admin authorization required' });
   }
 
   const token = authHeader.substring(7).trim();
+
+  // Check if token belongs to an authentic user session with admin role
+  const user = await validateSession(token);
+  if (user && user.role === 'admin') {
+    req.isAdmin = true;
+    req.user = user;
+    return next();
+  }
+
+  // Check if token matches server-configured admin export key
   const configuredAdminKey = process.env.ADMIN_EXPORT_SECRET || process.env.ADMIN_SECRET_KEY;
   const isTest = process.env.NODE_ENV === 'test';
 
@@ -470,7 +481,7 @@ app.patch(['/api/v1/auth/profile', '/api/v1/user/profile'], requireUserAuth, asy
   }
 });
 
-// Phone & Password Account Registration
+// Phone & Password Account Registration (Zero SMS dependencies)
 app.post('/api/v1/auth/phone/register', async (req: Request, res: Response) => {
   try {
     const { countryCode, nationalNumber, password, name, recoveryEmail } = req.body;
@@ -772,6 +783,191 @@ app.get('/api/v1/admin/export', requireAdminAuth, async (_req: AuthenticatedRequ
       participants,
       progress,
       assessments
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Dashboard Summary & Live Dataset (Protected strictly for role: admin)
+app.get('/api/v1/admin/dashboard', requireRoles(['admin']), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const [
+      users,
+      participants,
+      modules,
+      moduleProgresses,
+      lessonProgresses,
+      certificates,
+      projectSubmissions,
+      quizSubmissions,
+      userSessionsCount
+    ] = await Promise.all([
+      User.findAll({
+        attributes: [
+          'id', 'name', 'email', 'phone', 'phoneVerified',
+          'role', 'authProvider', 'title', 'institution', 'createdAt', 'updatedAt'
+        ],
+        order: [['createdAt', 'DESC']]
+      }),
+      Participant.findAll({ order: [['createdAt', 'DESC']] }),
+      Module.findAll({ order: [['order', 'ASC']] }),
+      ModuleProgress.findAll({ order: [['lastAccessed', 'DESC']] }),
+      LessonProgress.findAll({ order: [['lastAccessedAt', 'DESC']] }),
+      Certificate.findAll({ order: [['createdAt', 'DESC']] }),
+      ProjectSubmission.findAll({ order: [['createdAt', 'DESC']] }),
+      QuizSubmission.findAll({ order: [['createdAt', 'DESC']] }),
+      UserSession.count()
+    ]);
+
+    // Roles distribution
+    const rolesCount = {
+      learner: users.filter(u => u.role === 'learner').length,
+      instructor: users.filter(u => u.role === 'instructor').length,
+      admin: users.filter(u => u.role === 'admin').length,
+      researcher: users.filter(u => u.role === 'researcher').length
+    };
+
+    // User lookup map for enriched display
+    const userMap = new Map<string, { name: string; email: string }>();
+    users.forEach(u => {
+      userMap.set(u.id, {
+        name: u.name || u.email || 'Learner',
+        email: u.email || (u.phone ? `Phone: ${u.phone}` : 'Unlinked')
+      });
+    });
+
+    // Synthesize real-time activity events from authentic database records
+    const activity: Array<{
+      id: string;
+      type: 'registration' | 'lesson_completed' | 'certificate_earned' | 'project_submitted';
+      title: string;
+      description: string;
+      userName: string;
+      userEmail: string;
+      timestamp: Date;
+    }> = [];
+
+    // Add recent user registrations
+    users.slice(0, 15).forEach(u => {
+      activity.push({
+        id: `reg-${u.id}`,
+        type: 'registration',
+        title: 'New Account Registered',
+        description: `Registered with ${u.authProvider} provider as ${u.role}`,
+        userName: u.name || u.email || 'New User',
+        userEmail: u.email || (u.phone ? `Phone: ${u.phone}` : 'Unlinked'),
+        timestamp: u.createdAt
+      });
+    });
+
+    // Add recent completed lessons
+    lessonProgresses.filter(lp => lp.completed).slice(0, 20).forEach(lp => {
+      const uInfo = userMap.get(lp.userId) || { name: 'Enrolled Learner', email: '' };
+      activity.push({
+        id: `lp-${lp.id}`,
+        type: 'lesson_completed',
+        title: 'Lesson Completed',
+        description: `Completed lesson ${lp.lessonId} in module ${lp.moduleId}`,
+        userName: uInfo.name,
+        userEmail: uInfo.email,
+        timestamp: lp.lastAccessedAt || lp.updatedAt
+      });
+    });
+
+    // Add certificates
+    certificates.forEach(c => {
+      activity.push({
+        id: `cert-${c.id}`,
+        type: 'certificate_earned',
+        title: 'Certificate Awarded',
+        description: `Earned ${c.courseTitle} (${c.distinction || 'Honors'})`,
+        userName: c.learnerName,
+        userEmail: userMap.get(c.userId)?.email || '',
+        timestamp: c.issueDate || c.createdAt
+      });
+    });
+
+    // Add project submissions
+    projectSubmissions.forEach(ps => {
+      const uInfo = userMap.get(ps.userId) || { name: 'Learner', email: '' };
+      activity.push({
+        id: `proj-${ps.id}`,
+        type: 'project_submitted',
+        title: 'Applied Project Submitted',
+        description: `Submitted "${ps.title}" (${ps.projectType}) - Status: ${ps.status}`,
+        userName: uInfo.name,
+        userEmail: uInfo.email,
+        timestamp: ps.createdAt
+      });
+    });
+
+    // Sort combined activity descending
+    activity.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers: users.length,
+        totalParticipants: participants.length,
+        totalLessonCompletions: lessonProgresses.filter(lp => lp.completed).length,
+        totalCertificates: certificates.length,
+        totalProjectSubmissions: projectSubmissions.length,
+        totalActiveSessions: userSessionsCount,
+        rolesCount
+      },
+      database: {
+        dialect: 'sqlite',
+        storage: 'server/database.sqlite',
+        connected: true,
+        tableCount: 21
+      },
+      users,
+      modules,
+      moduleProgresses,
+      lessonProgresses,
+      certificates,
+      projectSubmissions,
+      quizSubmissions,
+      recentActivity: activity.slice(0, 30)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Role Management Endpoint (Protected strictly for role: admin)
+app.patch('/api/v1/admin/users/:id/role', requireRoles(['admin']), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+    const validRoles = ['learner', 'instructor', 'admin', 'researcher'];
+    
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: `Invalid role. Allowed roles: ${validRoles.join(', ')}` });
+    }
+
+    const targetUser = await User.findByPk(id);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Protect against self-demotion lockout
+    if (req.user?.id === id && role !== 'admin') {
+      return res.status(400).json({ error: 'Cannot remove admin role from your own active account' });
+    }
+
+    await targetUser.update({ role });
+
+    res.json({
+      success: true,
+      message: `User role successfully updated to ${role}`,
+      user: {
+        id: targetUser.id,
+        name: targetUser.name,
+        email: targetUser.email,
+        role: targetUser.role
+      }
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

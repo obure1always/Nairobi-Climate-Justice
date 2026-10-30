@@ -24,6 +24,7 @@ import ActionGuides from './pages/ActionGuides';
 import Buddy from './pages/Buddy';
 import Awareness from './pages/Awareness';
 import Login from './pages/Login';
+import AdminDashboard from './pages/AdminDashboard';
 import LessonView from './components/LessonView';
 import AssessmentView from './components/AssessmentView';
 import Onboarding from './components/Onboarding';
@@ -31,7 +32,7 @@ import { GuestTransferModal } from './components/GuestTransferModal';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { settings, isLoading } = useProgress();
-  const { user, isGuest, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const location = useLocation();
 
   if (isLoading || authLoading) {
@@ -42,13 +43,13 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     );
   }
 
-  // Learner can continue if logged in OR in guest mode for public discovery
-  if (!user && !isGuest) {
+  // Protected pages strictly enforce authentic account session
+  if (!user) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
   if (!settings?.onboardingComplete) {
-    return <Navigate to="/onboarding" replace />;
+    return <Navigate to="/onboarding" state={{ from: location.pathname }} replace />;
   }
   return <>{children}</>;
 };
@@ -74,8 +75,9 @@ function AppRoutes() {
           <Route path="/pathways" element={<Pathways />} />
           <Route path="/projects" element={<Projects />} />
 
-          {/* Institutional & Instructor Workflows */}
+          {/* Institutional & Staff Workflows */}
           <Route path="/instructor" element={<InstructorStudio />} />
+          <Route path="/admin" element={<AdminDashboard />} />
 
           {/* Climate Differentiators */}
           <Route path="/climate-data" element={<ClimateData />} />

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,6 +20,7 @@ import {
   AlertCircle,
   Edit3,
   Save,
+  Phone,
   Image as ImageIcon
 } from 'lucide-react';
 
@@ -309,6 +310,16 @@ export default function Profile() {
 
             {/* Profile Action Buttons */}
             <div className="flex items-center gap-2 self-start sm:self-center">
+              {user?.role === 'admin' && (
+                <Link
+                  to="/admin"
+                  className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                >
+                  <Shield className="w-4 h-4" />
+                  <span>Admin Console</span>
+                </Link>
+              )}
+
               {user && (
                 <button
                   onClick={() => setIsEditingProfile(!isEditingProfile)}
