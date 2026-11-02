@@ -2,6 +2,9 @@
 
 An offline-first educational web application and backend service designed to teach youth in Nairobi, Kenya, about climate adaptation, local environmental risks, and civic participation.
 
+- [Technical report (PDF)](https://drive.google.com/file/d/1nEOl3ixWgKYNr1Cz1lpE51W2XRWILixE/view?usp=sharing)
+- [Walkthrough video](https://drive.google.com/file/d/1Lk4-0LpEPMUIVODr48VoVT0UvdWZK-KB/view?usp=sharing)
+
 ## 1. Project Overview
 
 ### Problem Statement
@@ -207,15 +210,14 @@ The platform includes an administrative audit interface located at `/admin`:
 
 ## 6. Technical Report
 
-- **Document Status**:
-  The formal five-page Technical Report document is intended to be provided as a committed PDF at `docs/technical-report.pdf`.
+- **Document Links**:
+  - [Technical report (PDF)](https://drive.google.com/file/d/1nEOl3ixWgKYNr1Cz1lpE51W2XRWILixE/view?usp=sharing)
+  - [Walkthrough video](https://drive.google.com/file/d/1Lk4-0LpEPMUIVODr48VoVT0UvdWZK-KB/view?usp=sharing)
 - **Required Report Topics**:
   1. Scope and Implementation Alignment: Evidence of delivered curriculum, PWA offline capability, and dual authentication without third-party SMS dependencies.
   2. Technical Architecture and Functionality: Decoupled client-server design, IndexedDB offline data layer, and SQLite relational persistence.
   3. Testing Methodology and Verified Results: Automated unit, integration, and UI test coverage across client and server.
   4. Code Quality and Security: scrypt password hashing, session isolation, role-based admin endpoints, and elimination of sensitive credential leakage.
-- **Submission Gap**:
-  The compiled PDF document (`docs/technical-report.pdf`) must be generated and committed to the repository to complete this requirement.
 
 ---
 
