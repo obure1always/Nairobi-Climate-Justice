@@ -1,5 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import { 
   sequelize, 
   setupDb, 
@@ -49,6 +51,20 @@ import {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
+
+// Detect client production build directory for unified full-stack hosting
+const potentialDistPaths = [
+  path.resolve(__dirname, '../../client/dist'),
+  path.resolve(__dirname, '../client/dist'),
+  path.resolve(process.cwd(), 'client/dist'),
+  path.resolve(process.cwd(), '../client/dist'),
+  path.resolve(process.cwd(), 'dist')
+];
+const clientDistPath = potentialDistPaths.find(p => fs.existsSync(p));
+
+if (clientDistPath) {
+  app.use(express.static(clientDistPath));
+}
 
 // Extend express Request for participantId, user & admin validation
 interface AuthenticatedRequest extends Request {
@@ -159,6 +175,12 @@ const requireAdminAuth = async (req: AuthenticatedRequest, res: Response, next: 
 
 // Health and Root Endpoint (No hardcoded credentials exposed)
 app.get('/', (_req: Request, res: Response) => {
+  if (clientDistPath) {
+    const indexPath = path.join(clientDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+  }
   res.send(`
     <!DOCTYPE html>
     <html lang="en">
@@ -1763,6 +1785,23 @@ const seedModules = async () => {
     ]);
   }
 };
+
+// SPA client-side routing fallback (serve index.html for non-API GET requests)
+if (clientDistPath) {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return next();
+    }
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    const indexPath = path.join(clientDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+    next();
+  });
+}
 
 const PORT = process.env.PORT || 3001;
 
