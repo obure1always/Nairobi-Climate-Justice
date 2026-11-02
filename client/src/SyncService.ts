@@ -21,8 +21,8 @@ export class SyncService {
 
   static async syncNow() {
     if (!navigator.onLine) return;
-    const participantId = localStorage.getItem('participantId');
-    if (!participantId) return;
+    const authToken = localStorage.getItem('participantId') || localStorage.getItem('climate_justice_token') || sessionStorage.getItem('climate_justice_token');
+    if (!authToken) return;
 
     const pendingRecords = await db.syncQueue.where('status').equals('pending').toArray();
     if (pendingRecords.length === 0) return;
@@ -35,7 +35,7 @@ export class SyncService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${participantId}`
+          'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify({ records: pendingRecords })
       });

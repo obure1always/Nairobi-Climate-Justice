@@ -58,7 +58,7 @@ interface AuthenticatedRequest extends Request {
 }
 
 // Participant Authentication Middleware
-const requireParticipantAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+const requireParticipantAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: Missing or malformed Bearer token' });
@@ -67,6 +67,17 @@ const requireParticipantAuth = (req: AuthenticatedRequest, res: Response, next: 
   const token = authHeader.substring(7).trim();
   if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Empty authorization token' });
+  }
+
+  try {
+    const user = await validateSession(token);
+    if (user) {
+      req.user = user;
+      req.participantId = user.participantId || user.id;
+      return next();
+    }
+  } catch {
+    // Non-session token: proceed to check as raw participant token
   }
 
   req.participantId = token;
