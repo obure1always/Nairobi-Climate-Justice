@@ -3,6 +3,7 @@ import React from 'react';
 interface MarkdownRendererProps {
   content: string;
   className?: string;
+  inline?: boolean;
 }
 
 /**
@@ -73,13 +74,15 @@ function renderInline(text: string): React.ReactNode[] {
   return nodes.length > 0 ? nodes : [text];
 }
 
-export default function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
+export default function MarkdownRenderer({ content, className = '', inline = false }: MarkdownRendererProps) {
   if (!content) return null;
 
   // Unescape backslashes before markdown characters and normalize line breaks
   const sanitizedContent = content
     .replace(/\\n/g, '\n')
     .replace(/\\([*_#`~\[\]()|])/g, '$1');
+
+  if (inline) return <span className={className}>{renderInline(sanitizedContent)}</span>;
 
   const lines = sanitizedContent.split('\n');
   const elements: React.ReactNode[] = [];

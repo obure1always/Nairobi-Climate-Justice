@@ -2,7 +2,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { PDFDict, PDFDocument, PDFName, PDFString } from 'pdf-lib';
+import { PDFDict, PDFDocument, PDFName, PDFPage, PDFString } from 'pdf-lib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { modules } from '../data/modules';
 import { createModulePdf, createStudyNotesPdf } from './pdfDocuments';
@@ -22,7 +22,10 @@ describe('PDF documents', () => {
     }));
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it('creates a multipage A4 module PDF with static Unicode regular and bold fonts', async () => {
     for (const language of ['en', 'sw'] as const) {
@@ -50,5 +53,22 @@ describe('PDF documents', () => {
     const action = pdf.context.lookup(annotation.get(PDFName.of('A')), PDFDict);
     const uri = pdf.context.lookup(action.get(PDFName.of('URI')), PDFString);
     expect(uri.decodeText()).toBe('https://example.org/data');
+  });
+
+  it('draws bold terms in the bold font and omits emphasis markers in study notes', async () => {
+    const drawText = vi.spyOn(PDFPage.prototype, 'drawText');
+    await createStudyNotesPdf(
+      'A **Life-Cycle Assessment (LCA)** examines the full product lifespan.\n\nA fictional advert claims: *"Zero impact!"*',
+      'Product Life-Cycles'
+    );
+
+    const boldText = drawText.mock.calls
+      .filter(([, options]) => options?.font?.name === 'NotoSans-Bold')
+      .map(([text]) => text)
+      .join(' ');
+    expect(boldText).toContain('Life-Cycle Assessment (LCA)');
+    const drawnText = drawText.mock.calls.map(([text]) => text).join(' ');
+    expect(drawnText).toContain('"Zero impact!"');
+    expect(drawnText).not.toContain('*');
   });
 });

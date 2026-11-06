@@ -130,7 +130,7 @@ export default function Learn() {
                       {isSwahili ? 'Moduli' : 'Module'} {index + 1}
                     </span>
                     <span className="text-xs text-gray-500">
-                      {totalLessons} {isSwahili ? 'Masomo' : 'Lessons'} • {module.quiz.length} {isSwahili ? 'Maswali' : 'Quizzes'}
+                      {totalLessons} {isSwahili ? 'Masomo' : 'Lessons'} • {module.quiz.length} {isSwahili ? 'Maswali ya Jaribio' : 'Quiz Questions'}
                     </span>
                   </div>
 

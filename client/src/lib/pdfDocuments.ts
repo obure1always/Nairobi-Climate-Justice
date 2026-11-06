@@ -51,13 +51,15 @@ const measure = (fonts: PdfFonts, text: string, bold: boolean, size: number) =>
   fonts[bold ? 'bold' : 'regular'].widthOfTextAtSize(text, size);
 
 const formatInline = (value: string): TextRun[] => {
-  const tokens = value.split(/(\*\*[^*]+\*\*|__[^_]+__|\[[^\]]+\]\([^)]+\)|https?:\/\/\S+)/g).filter(Boolean);
+  const tokens = value.split(/(\*\*[^*]+\*\*|__[^_]+__|\[[^\]]+\]\([^)]+\)|https?:\/\/\S+|(?<![\p{L}\p{N}*\\])\*[^*\s](?:[^*\r\n]*[^*\s])?\*(?![\p{L}\p{N}*]))/gu).filter(Boolean);
   return tokens.flatMap(token => {
     const markdownLink = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (markdownLink) return [{ text: markdownLink[1], bold: false, url: markdownLink[2] }];
     if ((token.startsWith('**') && token.endsWith('**')) || (token.startsWith('__') && token.endsWith('__'))) {
       return [{ text: token.slice(2, -2), bold: true }];
     }
+    const italic = token.match(/^\*([^*\s](?:[^*\r\n]*[^*\s])?)\*$/);
+    if (italic) return [{ text: italic[1], bold: false }];
 
     const url = token.match(/^(https?:\/\/\S+?)([.,;:!?]+)?$/);
     if (url) {

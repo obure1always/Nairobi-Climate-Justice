@@ -243,18 +243,14 @@ export default function LessonView() {
   const currentLesson = moduleData.content[currentLessonIndex];
   const lessonMedia = currentLesson ? getLessonMedia(moduleData.id, currentLesson.id) : null;
   const activeLessonNotes = currentLesson ? generateComprehensiveStudyNotes(moduleData, currentLesson, lessonMedia) : '';
+  const completedLessons = progress[moduleData.id]?.completedLessons ?? [];
+  const firstIncompleteLesson = moduleData.content.findIndex((_, index) => !completedLessons.includes(index));
+  const allLessonsCompleted = firstIncompleteLesson === -1;
+  const moduleQuizLabel = isSwahili ? 'Jaribio la Moduli' : 'Module Quiz';
 
   const handleStartLessons = () => {
-    const p = progress[moduleData.id];
-    let startIdx = 0;
-    if (p && p.completedLessons) {
-      for (let i = 0; i < moduleData.content.length; i++) {
-        if (!p.completedLessons.includes(i)) {
-          startIdx = i;
-        }
-      }
-    }
-    setCurrentLessonIndex(startIdx);
+    setCurrentLessonIndex(allLessonsCompleted ? 0 : firstIncompleteLesson);
+    setActiveTab('content');
     setViewState('lesson');
   };
 
@@ -671,7 +667,41 @@ export default function LessonView() {
             
             <div className="max-w-4xl mx-auto p-6 md:p-12">
               <p className="text-lg md:text-xl text-gray-700 mb-8 leading-relaxed">{moduleData.description}</p>
-              
+
+              <div className="grid gap-3 mb-6 sm:grid-cols-2 lg:grid-cols-[1fr_auto_auto]">
+                <button
+                  type="button"
+                  onClick={handleStartLessons}
+                  className="bg-forest-green text-white px-6 py-3 rounded-full font-bold hover:bg-forest-green/90 flex items-center justify-center gap-2 shadow-natural transition"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  {allLessonsCompleted
+                    ? (isSwahili ? 'Pitia Masomo Tena' : 'Review Lessons')
+                    : completedLessons.length
+                      ? (isSwahili ? 'Endelea Kujifunza' : 'Continue Learning')
+                      : (isSwahili ? 'Anza Somo la Kwanza' : 'Start First Lesson')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewState('quiz_start')}
+                  className="px-6 py-3 rounded-full border border-forest-green text-forest-green font-bold hover:bg-emerald-50 transition flex items-center justify-center gap-2"
+                >
+                  <Trophy className="w-4 h-4" />
+                  {moduleQuizLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadModulePdf()}
+                  className="px-6 py-3 rounded-full border border-forest-green text-forest-green font-bold hover:bg-emerald-50 transition flex items-center justify-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  {isSwahili ? 'Pakua PDF ya Moduli' : 'Download Module PDF'}
+                </button>
+              </div>
+              {pdfDownloadError && (
+                <p role="alert" className="mb-4 text-sm text-red-700">{pdfDownloadError}</p>
+              )}
+
               <div className="bg-white rounded-organic p-6 md:p-8 shadow-natural border border-gray-100 mb-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -726,29 +756,6 @@ export default function LessonView() {
                   })}
                 </ul>
               </div>
-
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <button
-                  onClick={handleStartLessons}
-                  className="w-full bg-forest-green text-white py-4 rounded-full font-bold text-lg hover:bg-forest-green/90 flex items-center justify-center gap-2 shadow-natural transition"
-                >
-                  <Play className="w-5 h-5 fill-current" />
-                  {progress[moduleData.id]?.completedLessons?.length
-                    ? (isSwahili ? 'Endelea Kujifunza' : 'Continue Learning')
-                    : (isSwahili ? 'Anza Somo la Kwanza' : 'Start First Lesson')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDownloadModulePdf()}
-                  className="px-6 py-3 rounded-full border border-forest-green text-forest-green font-bold hover:bg-emerald-50 transition flex items-center justify-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  {isSwahili ? 'Pakua PDF ya Moduli' : 'Download Module PDF'}
-                </button>
-              </div>
-              {pdfDownloadError && (
-                <p role="alert" className="mt-3 text-sm text-red-700">{pdfDownloadError}</p>
-              )}
             </div>
           </motion.div>
         )}
@@ -1220,7 +1227,7 @@ export default function LessonView() {
                 {/* Main Explanatory Paragraphs */}
                 <div className="space-y-4 text-base md:text-lg text-gray-800 leading-relaxed">
                   {currentLesson.paragraphs.map((p, i) => (
-                    <p key={i}>{p}</p>
+                    <p key={i}><MarkdownRenderer content={p} inline /></p>
                   ))}
                 </div>
 
@@ -1423,7 +1430,7 @@ export default function LessonView() {
                       {isSwahili ? 'Muhtasari wa Somo na Nyaraka' : 'Official Lesson Notes & Offline Study Pack'}
                     </h3>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      {isSwahili ? 'Pakua nakala kamili ya kusoma nje ya mtandao au kuchapisha.' : 'Download complete markdown notes for offline revision or print.'}
+                      {isSwahili ? 'Pakua PDF ya kusoma nje ya mtandao au kuchapisha.' : 'Download the study notes as a PDF to read offline or print.'}
                     </p>
                   </div>
 
@@ -1574,16 +1581,31 @@ export default function LessonView() {
               <Trophy className="w-12 h-12 text-forest-green" />
             </div>
             <h2 className="text-3xl font-bold text-gray-900 mb-4">
-              {isSwahili ? 'Uko tayari kupima uelewa wako?' : 'Ready to test your knowledge?'}
+              {moduleQuizLabel}
             </h2>
-            <p className="text-gray-600 mb-8 leading-relaxed">
-              {moduleData.quiz.length} {isSwahili ? 'maswali yaliyotayarishwa kwa kina kuhusu' : 'substantive questions covering'} <strong>{moduleData.title}</strong>.
+            <p className="text-gray-600 mb-4 leading-relaxed">
+              {moduleData.quiz.length} {isSwahili ? 'maswali kuhusu' : 'questions on'} <strong>{moduleData.title}</strong>.
             </p>
-            <button 
-              onClick={() => setViewState('quiz_active')}
+            {!allLessonsCompleted && (
+              <p className="text-gray-600 mb-6">
+                {isSwahili ? 'Maliza masomo yote katika moduli hii ili kuanza jaribio.' : 'Complete all lessons in this module to start the quiz.'}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={allLessonsCompleted ? () => setViewState('quiz_active') : handleStartLessons}
               className="w-full bg-forest-green text-white py-4 rounded-full font-bold text-lg hover:bg-forest-green/90 transition shadow-natural"
             >
-              {isSwahili ? 'Anza Jaribio la Maswali' : 'Start Quiz'}
+              {allLessonsCompleted
+                ? (isSwahili ? 'Anza Jaribio la Maswali' : 'Start Quiz')
+                : (isSwahili ? 'Endelea na Masomo' : 'Continue Lessons')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewState('intro')}
+              className="mt-3 px-4 py-2 font-semibold text-forest-green hover:underline"
+            >
+              {isSwahili ? 'Rudi kwenye Moduli' : 'Back to Module'}
             </button>
           </motion.div>
         )}
