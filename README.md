@@ -108,7 +108,6 @@ The backend manages data persistence, authentication sessions, and curriculum re
    NODE_ENV=development
    ALLOWED_ORIGIN=http://localhost:5173
    SQLITE_DB_PATH=./database.sqlite
-   ADMIN_EXPORT_SECRET=replace_with_a_secure_random_64_character_hex_key
 
    # Optional external integrations (leave empty for default local behavior)
    GOOGLE_CLIENT_ID=
@@ -157,17 +156,17 @@ The frontend is a React application configured to communicate with the local bac
 The platform includes an administrative audit interface located at `/admin`:
 - **Dashboard URL**: `http://localhost:5173/admin`
 - **Backend API Endpoints**: `GET /api/v1/admin/dashboard` and `PATCH /api/v1/admin/users/:id/role`.
-- **Database Persistence**: Connected directly to `server/database.sqlite`.
+- **Database Persistence**: Uses the resolved `SQLITE_DB_PATH` (defaults to `server/database.sqlite` in the local server process).
 - **Authorization**:
   - Access is restricted strictly to authenticated accounts with `role: "admin"`.
   - Non-administrator requests receive an HTTP 403 Forbidden response.
   - Unauthenticated requests receive an HTTP 401 Unauthorized response.
   - Password hashes, password salts, and tokens are excluded from all admin responses.
 - **Admin Access Method**:
-  1. The server seeds an initial administrator user (`admin@climatejustice.ke`) with the `admin` role upon first database startup.
+  1. On a database with no administrator, set `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` in the server environment before startup. The password must be at least 14 characters. No public demo administrator or password is seeded.
   2. To promote an existing registered learner to administrator, use the user directory role toggle inside the `/admin` interface or update the SQLite record directly:
      ```bash
-     sqlite3 server/database.sqlite "UPDATE Users SET role = 'admin' WHERE email = 'learner@example.com';"
+     sqlite3 "$SQLITE_DB_PATH" "UPDATE users SET role = 'admin' WHERE email = 'learner@example.com';"
      ```
   3. Log in with the administrator account at `http://localhost:5173/login`, then navigate to `http://localhost:5173/admin` or click the "Admin Console" badge on `http://localhost:5173/profile`.
 
