@@ -4,6 +4,7 @@ import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
 import { useAuth } from '../contexts/AuthContext';
 import { modules } from '../data/modules';
+import { apiUrl } from '../lib/api';
 import { 
   Play, 
   Award, 
@@ -22,10 +23,10 @@ import {
 } from 'lucide-react';
 
 interface ServerCertificate {
-  certificateId: string;
+  id: string;
   courseTitle: string;
   issueDate: string;
-  status: string;
+  emailDeliveryStatus?: 'pending' | 'sending' | 'sent' | 'failed' | 'blocked' | 'not_sent';
 }
 
 interface ServerBookmark {
@@ -39,22 +40,39 @@ interface ServerBookmark {
 interface ServerQuizResult {
   id: string;
   moduleId: string;
-  scorePercentage: number;
+  score: number;
+  totalQuestions: number;
   passed: boolean;
   createdAt: string;
 }
 
 export default function Dashboard() {
   const { language } = useLanguage();
-  const { progress } = useProgress();
-  const { user } = useAuth();
+  const { progress, learningTime } = useProgress();
+  const { user, token } = useAuth();
   const navigate = useNavigate();
   const isSwahili = language === 'sw';
   const currentModules = modules[language];
 
-  const [certificates, setCertificates] = useState<ServerCertificate[]>([]);
-  const [bookmarks, setBookmarks] = useState<ServerBookmark[]>([]);
-  const [quizResults, setQuizResults] = useState<ServerQuizResult[]>([]);
+  const [serverData, setServerData] = useState<{
+    ownerId: string;
+    certificates: ServerCertificate[];
+    bookmarks: ServerBookmark[];
+    quizResults: ServerQuizResult[];
+  } | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [retryingCertificateId, setRetryingCertificateId] = useState<string | null>(null);
+  const [emailRetryError, setEmailRetryError] = useState<string | null>(null);
+  const [certificateDownloadError, setCertificateDownloadError] = useState<string | null>(null);
+  const accountData = serverData && serverData.ownerId === user?.id
+    ? serverData
+    : { certificates: [], bookmarks: [], quizResults: [] };
+
+  useEffect(() => {
+    const refresh = () => setRefreshVersion(value => value + 1);
+    window.addEventListener('climate-justice-data-changed', refresh);
+    return () => window.removeEventListener('climate-justice-data-changed', refresh);
+  }, []);
 
   // Fetch server data for authenticated users
   useEffect(() => {
@@ -64,35 +82,100 @@ export default function Dashboard() {
     }
 
     Promise.all([
-      fetch('/api/v1/certificates/my-certificates', {
+      fetch(apiUrl('/certificates/my-certificates'), {
         headers: { 'Authorization': `Bearer ${token}` }
       }).then(r => r.ok ? r.json() : { certificates: [] }),
 
-      fetch('/api/v1/learning/bookmarks', {
+      fetch(apiUrl('/learning/bookmarks'), {
         headers: { 'Authorization': `Bearer ${token}` }
       }).then(r => r.ok ? r.json() : { bookmarks: [] }),
 
-      fetch('/api/v1/assessments/my-results', {
+      fetch(apiUrl('/assessments/my-results'), {
         headers: { 'Authorization': `Bearer ${token}` }
       }).then(r => r.ok ? r.json() : { submissions: [] })
     ])
       .then(([certsData, bmarksData, quizesData]) => {
-        if (certsData?.certificates) setCertificates(certsData.certificates);
-        if (bmarksData?.bookmarks) setBookmarks(bmarksData.bookmarks);
-        if (quizesData?.submissions) setQuizResults(quizesData.submissions);
+        setServerData({
+          ownerId: user?.id || '',
+          certificates: Array.isArray(certsData) ? certsData : certsData?.certificates || [],
+          bookmarks: bmarksData?.bookmarks || [],
+          quizResults: Array.isArray(quizesData) ? quizesData : quizesData?.submissions || []
+        });
       })
       .catch(() => {
         // graceful offline fallback
       });
-  }, []);
+  }, [token, user?.id, refreshVersion]);
+
+  const downloadCertificate = async (certificateId: string) => {
+    const activeToken = sessionStorage.getItem('climate_justice_token')
+      || localStorage.getItem('climate_justice_token')
+      || localStorage.getItem('auth_token');
+    if (!activeToken) return;
+    setCertificateDownloadError(null);
+    try {
+      const response = await fetch(apiUrl(`/certificates/${certificateId}/pdf`), {
+        headers: { Authorization: `Bearer ${activeToken}` }
+      });
+      if (!response.ok) throw new Error(`Certificate download failed (${response.status})`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${certificateId}.pdf`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      console.error('Could not download the certificate', error);
+      setCertificateDownloadError('The certificate could not be downloaded right now. Please try again later.');
+    }
+  };
+
+  const retryCertificateEmail = async (certificateId: string) => {
+    const activeToken = sessionStorage.getItem('climate_justice_token')
+      || localStorage.getItem('climate_justice_token')
+      || localStorage.getItem('auth_token');
+    if (!activeToken) return;
+
+    setRetryingCertificateId(certificateId);
+    setEmailRetryError(null);
+    try {
+      const response = await fetch(apiUrl(`/certificates/${certificateId}/email/retry`), {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + activeToken }
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Email retry failed (${response.status})`);
+      setServerData(current => current ? {
+        ...current,
+        certificates: current.certificates.map(certificate => certificate.id === certificateId
+          ? { ...certificate, emailDeliveryStatus: result.emailDeliveryStatus }
+          : certificate)
+      } : current);
+    } catch (error) {
+      setEmailRetryError(error instanceof Error ? error.message : 'Certificate email retry failed.');
+    } finally {
+      setRetryingCertificateId(null);
+    }
+  };
 
   // Compute metrics from real user data
   const completedModulesCount = Object.values(progress).filter(p => p.completed).length;
   const inProgressModulesCount = Object.values(progress).filter(p => !p.completed && (p.completedLessons?.length || 0) > 0).length;
   const totalLessonsCompleted = Object.values(progress).reduce((acc, p) => acc + (p.completedLessons?.length || 0), 0);
   
-  // Estimated learning time (each lesson avg 15 min + assessments)
-  const estimatedHours = Math.round((totalLessonsCompleted * 0.25 + completedModulesCount * 0.5) * 10) / 10;
+  const totalLearningSeconds = learningTime.reduce((total, entry) => total + entry.seconds, 0);
+  const learningHours = Math.round(totalLearningSeconds / 360) / 10;
+  const totalCourseLessons = currentModules.reduce((total, module) => total + module.content.length, 0);
+  const completedCourseLessons = currentModules.reduce(
+    (total, module) => total + Math.min(progress[module.id]?.completedLessons.length || 0, module.content.length),
+    0
+  );
+  const modulesWithPassedQuiz = currentModules.filter(module =>
+    accountData.quizResults.some(result => result.moduleId === module.id && result.passed)
+  ).length;
+  const overallCoursePercent = Math.round(
+    ((completedCourseLessons + modulesWithPassedQuiz) / (totalCourseLessons + currentModules.length)) * 100
+  );
   
   // Learning streak: calculated from local progress updates
   const hasActivityToday = totalLessonsCompleted > 0;
@@ -114,16 +197,27 @@ export default function Dashboard() {
   const unstartedModule = currentModules.find(m => !progress[m.id] || ((progress[m.id].completedLessons?.length || 0) === 0 && !progress[m.id].completed));
   const recommendedItem = unstartedModule || currentModules[0];
 
-  // Weekly activity distribution curve (calculated from actual completion count)
-  const weeklyDistribution = [
-    { day: 'Mon', hours: totalLessonsCompleted > 0 ? 0.8 : 0 },
-    { day: 'Tue', hours: totalLessonsCompleted > 1 ? 1.5 : 0 },
-    { day: 'Wed', hours: totalLessonsCompleted > 3 ? 2.5 : 0 },
-    { day: 'Thu', hours: totalLessonsCompleted > 5 ? 4.0 : 0 },
-    { day: 'Fri', hours: totalLessonsCompleted > 6 ? 3.0 : 0 },
-    { day: 'Sat', hours: totalLessonsCompleted > 7 ? 5.5 : 0 },
-    { day: 'Sun', hours: totalLessonsCompleted > 2 ? 2.0 : 0 }
-  ];
+  const dateKey = (date: Date) => [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-');
+  const today = new Date();
+  const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const secondsByDate = new Map(learningTime.map(entry => [entry.date, entry.seconds]));
+  const weeklyDistribution = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    const day = date.toLocaleDateString(language === 'sw' ? 'sw-KE' : 'en-KE', { weekday: 'short' });
+    return {
+      date: dateKey(date),
+      day,
+      hours: Math.round(((secondsByDate.get(dateKey(date)) || 0) / 3600) * 10) / 10
+    };
+  });
+  const weeklyHours = Math.round(weeklyDistribution.reduce((total, item) => total + item.hours, 0) * 10) / 10;
+  const maxDailyHours = Math.max(1, ...weeklyDistribution.map(item => item.hours));
 
   return (
     <div className="min-h-full pb-20 bg-gray-50/60">
@@ -205,7 +299,7 @@ export default function Dashboard() {
               <Clock className="w-6 h-6" />
             </div>
             <div>
-              <div className="text-2xl font-black text-gray-900">{estimatedHours} hrs</div>
+              <div className="text-2xl font-black text-gray-900">{learningHours} hrs</div>
               <div className="text-xs font-semibold text-gray-500">
                 {isSwahili ? 'Muda wa Kujifunzia' : 'Total Learning Time'}
               </div>
@@ -350,8 +444,7 @@ export default function Dashboard() {
               {/* Bar / Curve Visualization */}
               <div className="h-44 flex items-end justify-between gap-2 pt-6 px-2 border-b border-gray-200">
                 {weeklyDistribution.map((item) => {
-                  const maxH = 6;
-                  const heightPct = Math.min(100, Math.max(10, (item.hours / maxH) * 100));
+                  const heightPct = item.hours > 0 ? Math.max(10, (item.hours / maxDailyHours) * 100) : 0;
 
                   return (
                     <div key={item.day} className="flex-1 flex flex-col items-center gap-2 h-full justify-end group">
@@ -375,9 +468,9 @@ export default function Dashboard() {
               </div>
 
               <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-                <span>Total this week: <strong>{estimatedHours} hours</strong></span>
+                <span>Total this week: <strong>{weeklyHours} hours</strong></span>
                 <span className="text-forest-green font-bold flex items-center gap-1">
-                  <TrendingUp className="w-3.5 h-3.5" /> +12% vs last week
+                <TrendingUp className="w-3.5 h-3.5" /> Recorded active learning time
                 </span>
               </div>
             </div>
@@ -389,16 +482,16 @@ export default function Dashboard() {
                   <Bookmark className="w-5 h-5 text-amber-500" />
                   {isSwahili ? 'Masomo Yaliyohifadhiwa' : 'Saved Lessons & Bookmarks'}
                 </h2>
-                <span className="text-xs text-gray-400">{bookmarks.length} saved</span>
+                <span className="text-xs text-gray-400">{accountData.bookmarks.length} saved</span>
               </div>
 
-              {bookmarks.length === 0 ? (
+              {accountData.bookmarks.length === 0 ? (
                 <div className="p-6 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-xs text-gray-500">
                   {isSwahili ? 'Bado hujaziweka alama masomo yoyote. Bofya alama ya Save unaposoma.' : 'No saved bookmarks yet. Click the "Save" button in any lesson to return here.'}
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {bookmarks.map((bm) => (
+                  {accountData.bookmarks.map((bm) => (
                     <div 
                       key={bm.id} 
                       onClick={() => navigate(`/module/${bm.moduleId}`)}
@@ -459,11 +552,11 @@ export default function Dashboard() {
                   {isSwahili ? 'Vyeti Vyangu Vilivyoidhinishwa' : 'Verified Certificates'}
                 </h3>
                 <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full">
-                  {certificates.length} Earned
+                  {accountData.certificates.length} Earned
                 </span>
               </div>
 
-              {certificates.length === 0 ? (
+              {accountData.certificates.length === 0 ? (
                 <div className="p-5 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-xs text-gray-500">
                   <ShieldCheck className="w-8 h-8 text-gray-400 mx-auto mb-2 opacity-50" />
                   <p className="font-semibold text-gray-700 mb-1">No Certificates Issued Yet</p>
@@ -479,30 +572,101 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {certificates.map((cert) => (
+                  {accountData.certificates.map((cert) => (
                     <div 
-                      key={cert.certificateId}
+                      key={cert.id}
                       className="p-4 rounded-2xl border border-amber-200 bg-amber-50/40 flex items-center justify-between gap-3"
                     >
                       <div>
                         <span className="text-[9px] font-mono text-amber-800 font-bold block">
-                          ID: {cert.certificateId}
+                          ID: {cert.id}
                         </span>
                         <h4 className="text-xs font-bold text-gray-900 mt-0.5">{cert.courseTitle}</h4>
                         <span className="text-[10px] text-gray-500">Issued: {cert.issueDate}</span>
+                        <span className="block text-[10px] text-gray-600 mt-1">
+                          Email: {cert.emailDeliveryStatus || 'not_sent'}
+                        </span>
+                        {cert.emailDeliveryStatus === 'failed' && (
+                          <button
+                            onClick={() => void retryCertificateEmail(cert.id)}
+                            disabled={retryingCertificateId === cert.id}
+                            className="mt-1 text-[10px] font-bold text-forest-green hover:underline disabled:opacity-50"
+                          >
+                            {retryingCertificateId === cert.id ? 'Retrying…' : 'Retry email'}
+                          </button>
+                        )}
+                        {cert.emailDeliveryStatus === 'blocked' && (
+                          <span className="block text-[10px] text-amber-800 mt-1">
+                            Verify an account email to receive this certificate by email.
+                          </span>
+                        )}
                       </div>
-                      <Link
-                        to={`/verify/${cert.certificateId}`}
-                        className="px-3 py-1.5 bg-forest-green text-white text-[11px] font-bold rounded-lg hover:bg-forest-green/90 transition shrink-0 flex items-center gap-1"
-                      >
-                        <span>Verify</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </Link>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => void downloadCertificate(cert.id)}
+                          className="px-3 py-1.5 bg-forest-green text-white text-[11px] font-bold rounded-lg hover:bg-forest-green/90 transition"
+                        >
+                          Download PDF
+                        </button>
+                        <Link
+                          to={`/verify/${cert.id}`}
+                          className="px-3 py-1.5 bg-white text-forest-green border border-forest-green/20 text-[11px] font-bold rounded-lg hover:bg-forest-green/5 transition flex items-center gap-1"
+                        >
+                          <span>Verify</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </Link>
+                      </div>
                     </div>
                   ))}
+                  {emailRetryError && (
+                    <p role="alert" className="text-xs text-red-700">{emailRetryError}</p>
+                  )}
+                  {certificateDownloadError && (
+                    <p role="alert" className="text-xs text-red-700">{certificateDownloadError}</p>
+                  )}
                 </div>
               )}
             </div>
+
+            <section className="bg-white rounded-3xl p-6 border border-gray-200/80 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-base font-extrabold text-gray-900">
+                  {isSwahili ? 'Maendeleo ya Kozi' : 'Course Progress'}
+                </h3>
+                <span className="text-sm font-black text-forest-green">{overallCoursePercent}%</span>
+              </div>
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
+                <div className="h-full bg-forest-green" style={{ width: `${overallCoursePercent}%` }} />
+              </div>
+              <p className="text-xs text-gray-500 mb-4">
+                {completedCourseLessons} / {totalCourseLessons} lessons complete · {modulesWithPassedQuiz} / {currentModules.length} quizzes passed
+              </p>
+              <ul className="space-y-2">
+                {currentModules.map(module => {
+                  const completed = Math.min(progress[module.id]?.completedLessons.length || 0, module.content.length);
+                  const attempts = accountData.quizResults.filter(result => result.moduleId === module.id);
+                  const passed = attempts.some(result => result.passed);
+                  const latest = attempts[0];
+                  return (
+                    <li key={module.id} className="flex items-start justify-between gap-3 text-xs border-t border-gray-100 pt-2">
+                      <div>
+                        <Link to={`/module/${module.id}`} className="font-bold text-gray-800 hover:text-forest-green">
+                          {module.title}
+                        </Link>
+                        <p className="text-gray-500 mt-0.5">
+                          {completed}/{module.content.length} lessons · {attempts.length} quiz attempt{attempts.length === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                      <span className={passed ? 'font-bold text-emerald-700' : latest ? 'font-bold text-red-600' : 'text-gray-400'}>
+                        {passed
+                          ? latest ? `${Math.round((latest.score / latest.totalQuestions) * 100)}% · passed` : 'Passed'
+                          : latest ? `${Math.round((latest.score / latest.totalQuestions) * 100)}% · retake` : 'Not taken'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
 
             {/* Quiz Performance History */}
             <div className="bg-white rounded-3xl p-6 border border-gray-200/80 shadow-sm">
@@ -511,16 +675,16 @@ export default function Dashboard() {
                   <Target className="w-5 h-5 text-forest-green" />
                   {isSwahili ? 'Matokeo ya Majaribio' : 'Assessment History'}
                 </h3>
-                <span className="text-xs text-gray-400">{quizResults.length} Submissions</span>
+                <span className="text-xs text-gray-400">{accountData.quizResults.length} Submissions</span>
               </div>
 
-              {quizResults.length === 0 ? (
+              {accountData.quizResults.length === 0 ? (
                 <div className="p-4 text-center bg-gray-50 rounded-2xl text-xs text-gray-500">
                   Take any module quiz to record your verified test score on this dashboard.
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {quizResults.slice(0, 5).map((q) => (
+                  {accountData.quizResults.slice(0, 5).map((q) => (
                     <div key={q.id} className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between text-xs">
                       <div>
                         <span className="font-bold text-gray-900 block">{q.moduleId.toUpperCase()} Assessment</span>
@@ -528,7 +692,7 @@ export default function Dashboard() {
                       </div>
                       <div className="text-right">
                         <span className={`font-black text-sm block ${q.passed ? 'text-emerald-700' : 'text-red-600'}`}>
-                          {q.scorePercentage}%
+                          {q.totalQuestions ? Math.round((q.score / q.totalQuestions) * 100) : 0}%
                         </span>
                         <span className="text-[10px] font-bold text-gray-500">
                           {q.passed ? 'PASSED (≥70%)' : 'RETRY NEEDED'}

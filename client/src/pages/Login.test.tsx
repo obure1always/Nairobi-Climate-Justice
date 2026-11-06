@@ -28,6 +28,7 @@ describe('Authentication Interface', () => {
       token: null,
       isGuest: true,
       guestId: 'guest_test_123',
+      ownerId: 'guest_test_123',
       isLoading: false,
       error: null,
       showTransferModal: false,

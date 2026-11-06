@@ -1,11 +1,16 @@
 import { Sequelize, DataTypes, Model, Optional } from 'sequelize';
 import dotenv from 'dotenv';
+import path from 'path';
 
 dotenv.config();
 
+export const sqliteDatabasePath = process.env.NODE_ENV === 'test'
+  ? ':memory:'
+  : path.resolve(process.env.SQLITE_DB_PATH || './database.sqlite');
+
 export const sequelize = new Sequelize({
   dialect: 'sqlite',
-  storage: process.env.NODE_ENV === 'test' ? ':memory:' : './database.sqlite',
+  storage: sqliteDatabasePath,
   logging: false,
 });
 
@@ -58,6 +63,7 @@ Lesson.init({
 export class ModuleProgress extends Model {
   declare id: string;
   declare participantId: string;
+  declare userId: string | null;
   declare moduleId: string;
   declare completedLessons: number;
   declare completed: boolean;
@@ -66,6 +72,7 @@ export class ModuleProgress extends Model {
 ModuleProgress.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   participantId: { type: DataTypes.STRING, allowNull: false },
+  userId: { type: DataTypes.STRING, allowNull: true },
   moduleId: { type: DataTypes.STRING, allowNull: false },
   completedLessons: { type: DataTypes.INTEGER, defaultValue: 0 },
   completed: { type: DataTypes.BOOLEAN, defaultValue: false },
@@ -103,6 +110,7 @@ AssessmentResponse.init({
 export class SyncRecord extends Model {
   declare id: string;
   declare participantId: string;
+  declare userId: string | null;
   declare clientEventId: string;
   declare entityType: string;
   declare entityData: any;
@@ -111,6 +119,7 @@ export class SyncRecord extends Model {
 SyncRecord.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   participantId: { type: DataTypes.STRING, allowNull: false },
+  userId: { type: DataTypes.STRING, allowNull: true },
   clientEventId: { type: DataTypes.STRING, unique: true }, // Idempotency
   entityType: DataTypes.STRING,
   entityData: DataTypes.JSONB,
@@ -120,6 +129,7 @@ SyncRecord.init({
 export class User extends Model {
   declare id: string;
   declare email: string | null;
+  declare emailVerified: boolean;
   declare phone: string | null;
   declare phoneVerified: boolean;
   declare passwordHash: string | null;
@@ -142,6 +152,7 @@ export class User extends Model {
 User.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   email: { type: DataTypes.STRING, unique: true, allowNull: true },
+  emailVerified: { type: DataTypes.BOOLEAN, defaultValue: false },
   phone: { type: DataTypes.STRING, unique: true, allowNull: true },
   phoneVerified: { type: DataTypes.BOOLEAN, defaultValue: false },
   passwordHash: { type: DataTypes.STRING, allowNull: true },
@@ -247,6 +258,7 @@ LessonQuestion.init({
 
 export class QuizSubmission extends Model {
   declare id: string;
+  declare clientEventId: string | null;
   declare userId: string;
   declare moduleId: string;
   declare pathwayId: string | null;
@@ -259,6 +271,7 @@ export class QuizSubmission extends Model {
 }
 QuizSubmission.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  clientEventId: { type: DataTypes.STRING, allowNull: true },
   userId: { type: DataTypes.STRING, allowNull: false },
   moduleId: { type: DataTypes.STRING, allowNull: false },
   pathwayId: { type: DataTypes.STRING, allowNull: true },
@@ -339,6 +352,31 @@ Certificate.init({
   verificationUrl: { type: DataTypes.STRING, allowNull: false },
   distinction: { type: DataTypes.STRING, allowNull: true },
 }, { sequelize, modelName: 'certificate' });
+
+export class CertificateDelivery extends Model {
+  declare certificateId: string;
+  declare userId: string;
+  declare recipientEmail: string | null;
+  declare status: 'pending' | 'sending' | 'sent' | 'failed' | 'blocked';
+  declare attemptCount: number;
+  declare lastAttemptAt: Date | null;
+  declare sentAt: Date | null;
+  declare lastError: string | null;
+}
+CertificateDelivery.init({
+  certificateId: { type: DataTypes.STRING, primaryKey: true },
+  userId: { type: DataTypes.STRING, allowNull: false },
+  recipientEmail: { type: DataTypes.STRING, allowNull: true },
+  status: {
+    type: DataTypes.ENUM('pending', 'sending', 'sent', 'failed', 'blocked'),
+    allowNull: false,
+    defaultValue: 'pending'
+  },
+  attemptCount: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  lastAttemptAt: { type: DataTypes.DATE, allowNull: true },
+  sentAt: { type: DataTypes.DATE, allowNull: true },
+  lastError: { type: DataTypes.TEXT, allowNull: true }
+}, { sequelize, modelName: 'certificate_delivery' });
 
 export class ImpactAction extends Model {
   declare id: string;
@@ -453,32 +491,40 @@ export const setupDb = async () => {
   await sequelize.sync();
 
   // Automatic SQLite column migration if database was created with older schema
-  try {
-    const [cols] = await sequelize.query('PRAGMA table_info(users);') as [any[], any];
-    const colNames = (cols || []).map((c: any) => c.name);
+  const ensureColumn = async (table: string, column: string, definition: string) => {
+    const [columns] = await sequelize.query(`PRAGMA table_info(${table});`) as [Array<{ name: string }>, unknown];
+    if (!columns.some(existing => existing.name === column)) {
+      await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+      return true;
+    }
+    return false;
+  };
 
-    if (!colNames.includes('phone')) {
-      await sequelize.query('ALTER TABLE users ADD COLUMN phone VARCHAR(255);');
-    }
-    if (!colNames.includes('phoneVerified')) {
-      await sequelize.query('ALTER TABLE users ADD COLUMN phoneVerified TINYINT(1) DEFAULT 0;');
-    }
-    if (!colNames.includes('role')) {
-      await sequelize.query("ALTER TABLE users ADD COLUMN role VARCHAR(255) DEFAULT 'learner';");
-    }
-    if (!colNames.includes('title')) {
-      await sequelize.query('ALTER TABLE users ADD COLUMN title VARCHAR(255);');
-    }
-    if (!colNames.includes('bio')) {
-      await sequelize.query('ALTER TABLE users ADD COLUMN bio TEXT;');
-    }
-    if (!colNames.includes('expertise')) {
-      await sequelize.query('ALTER TABLE users ADD COLUMN expertise VARCHAR(255);');
-    }
-    if (!colNames.includes('institution')) {
-      await sequelize.query('ALTER TABLE users ADD COLUMN institution VARCHAR(255);');
-    }
-  } catch (err) {
-    // Non-blocking in test environment
+  await ensureColumn('users', 'emailVerified', 'TINYINT(1) DEFAULT 0');
+  const userColumns: Array<[string, string]> = [
+    ['phone', 'VARCHAR(255)'],
+    ['phoneVerified', 'TINYINT(1) DEFAULT 0'],
+    ['role', "VARCHAR(255) DEFAULT 'learner'"],
+    ['title', 'VARCHAR(255)'],
+    ['bio', 'TEXT'],
+    ['expertise', 'VARCHAR(255)'],
+    ['institution', 'VARCHAR(255)']
+  ];
+  for (const [column, definition] of userColumns) {
+    await ensureColumn('users', column, definition);
   }
+  await CertificateDelivery.update(
+    { status: 'failed', lastError: 'Email delivery was interrupted by a server restart.' },
+    { where: { status: 'sending' } }
+  );
+
+  await ensureColumn('module_progresses', 'userId', 'VARCHAR(255)');
+  await ensureColumn('sync_records', 'userId', 'VARCHAR(255)');
+  await ensureColumn('quiz_submissions', 'clientEventId', 'VARCHAR(255)');
+  await sequelize.query(
+    'CREATE UNIQUE INDEX IF NOT EXISTS quiz_submissions_user_client_event_id ON quiz_submissions (userId, clientEventId) WHERE clientEventId IS NOT NULL;'
+  );
+  await sequelize.query(
+    "CREATE UNIQUE INDEX IF NOT EXISTS certificates_user_course_id ON certificates (userId, pathwayId) WHERE pathwayId = 'nairobi-climate-justice';"
+  );
 };

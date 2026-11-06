@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { apiUrl } from '../lib/api';
 import { 
   ShieldAlert, 
   ShieldCheck, 
@@ -18,7 +19,8 @@ import {
   CheckCircle,
   Clock,
   UserCheck,
-  AlertCircle
+  AlertCircle,
+  Target
 } from 'lucide-react';
 
 interface AdminUser {
@@ -62,6 +64,16 @@ interface LessonProgressItem {
   playbackSeconds: number;
   notes: string | null;
   lastAccessedAt: string;
+}
+
+interface QuizSubmissionItem {
+  id: string;
+  userId: string;
+  moduleId: string;
+  score: number;
+  totalQuestions: number;
+  passed: boolean;
+  createdAt: string;
 }
 
 interface CertificateItem {
@@ -124,6 +136,7 @@ interface DashboardData {
   modules: ModuleItem[];
   moduleProgresses: ModuleProgressItem[];
   lessonProgresses: LessonProgressItem[];
+  quizSubmissions: QuizSubmissionItem[];
   certificates: CertificateItem[];
   projectSubmissions: ProjectSubmissionItem[];
   recentActivity: ActivityEvent[];
@@ -133,7 +146,7 @@ export default function AdminDashboard() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'courses' | 'progress' | 'certificates' | 'activity'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'courses' | 'progress' | 'assessments' | 'certificates' | 'activity'>('users');
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -163,7 +176,7 @@ export default function AdminDashboard() {
     }
 
     try {
-      const res = await fetch('/api/v1/admin/dashboard', {
+      const res = await fetch(apiUrl('/admin/dashboard'), {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
@@ -206,7 +219,7 @@ export default function AdminDashboard() {
     const token = localStorage.getItem('climate_justice_token') || sessionStorage.getItem('climate_justice_token');
 
     try {
-      const res = await fetch(`/api/v1/admin/users/${selectedUser.id}/role`, {
+      const res = await fetch(apiUrl(`/admin/users/${selectedUser.id}/role`), {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -244,7 +257,7 @@ export default function AdminDashboard() {
   const handleDownloadAuditJson = async () => {
     const token = localStorage.getItem('climate_justice_token') || sessionStorage.getItem('climate_justice_token');
     try {
-      const res = await fetch('/api/v1/admin/export', {
+      const res = await fetch(apiUrl('/admin/export'), {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -381,7 +394,7 @@ export default function AdminDashboard() {
             </div>
             <div>
               <p className="text-xs font-bold text-gray-900">
-                Connected Database: <span className="font-mono text-forest-green font-semibold">server/database.sqlite</span>
+                Connected Database: <span className="font-mono text-forest-green font-semibold">{data?.database.storage || 'Loading...'}</span>
               </p>
               <p className="text-[11px] text-gray-500">
                 In-process SQLite 3 relational storage • 21 schema tables • Sequelize ORM active
@@ -389,7 +402,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="text-[11px] text-gray-600 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-200">
-            Admin Session: <span className="font-semibold text-gray-900">{user?.email || user?.name || 'admin@climatejustice.ke'}</span>
+            Admin Session: <span className="font-semibold text-gray-900">{user?.email || user?.name || 'Administrator'}</span>
           </div>
         </div>
 
@@ -513,6 +526,19 @@ export default function AdminDashboard() {
           >
             <GraduationCap className="w-3.5 h-3.5" />
             <span>Learner Progress ({data?.lessonProgresses.length ?? 0})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('assessments')}
+            className={`py-2 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer whitespace-nowrap ${
+              activeTab === 'assessments'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+            }`}
+          >
+            <Target className="w-3.5 h-3.5" />
+            <span>Quiz Attempts ({data?.quizSubmissions?.length ?? 0})</span>
           </button>
 
           <button
@@ -781,6 +807,51 @@ export default function AdminDashboard() {
         )}
 
         {/* ---------------------------------------------------- */}
+        {activeTab === 'assessments' && (
+          <div className="bg-white rounded-3xl border border-gray-200/80 shadow-xs overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-gray-100">
+              <h2 className="font-bold text-sm text-gray-900">
+                Server-graded quiz attempts ({data?.quizSubmissions.length ?? 0})
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Each row is an immutable attempt graded against the server-owned course answer key.
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-gray-50/70 border-b border-gray-200/60 text-gray-500 font-bold uppercase tracking-wider text-[10px]">
+                  <tr>
+                    <th className="py-3 px-4">Learner UUID</th>
+                    <th className="py-3 px-4">Module</th>
+                    <th className="py-3 px-4">Score</th>
+                    <th className="py-3 px-4">Result</th>
+                    <th className="py-3 px-4">Submitted</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {(data?.quizSubmissions || []).map(attempt => (
+                    <tr key={attempt.id}>
+                      <td className="py-3 px-4 font-mono text-[11px] text-gray-700">{attempt.userId}</td>
+                      <td className="py-3 px-4 font-bold text-forest-green">{attempt.moduleId.toUpperCase()}</td>
+                      <td className="py-3 px-4 font-semibold">
+                        {attempt.score}/{attempt.totalQuestions}
+                        ({attempt.totalQuestions ? Math.round((attempt.score / attempt.totalQuestions) * 100) : 0}%)
+                      </td>
+                      <td className={`py-3 px-4 font-bold ${attempt.passed ? 'text-emerald-700' : 'text-red-600'}`}>
+                        {attempt.passed ? 'Passed' : 'Failed - retake required'}
+                      </td>
+                      <td className="py-3 px-4 text-gray-500">{new Date(attempt.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {data?.quizSubmissions?.length === 0 && (
+                    <tr><td colSpan={5} className="py-8 text-center text-gray-500">No quiz attempts recorded.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* TAB 4: CERTIFICATES & SUBMISSIONS */}
         {/* ---------------------------------------------------- */}
         {activeTab === 'certificates' && (

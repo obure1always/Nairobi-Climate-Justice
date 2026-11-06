@@ -138,6 +138,7 @@ describe('AdminDashboard Component', () => {
       token: 'learner_token',
       isGuest: false,
       guestId: '',
+      ownerId: mockLearnerUser.id,
       isLoading: false,
       error: null,
       showTransferModal: false,
@@ -173,6 +174,7 @@ describe('AdminDashboard Component', () => {
       token: 'admin_token',
       isGuest: false,
       guestId: '',
+      ownerId: mockAdminUser.id,
       isLoading: false,
       error: null,
       showTransferModal: false,
@@ -199,10 +201,10 @@ describe('AdminDashboard Component', () => {
 
     // Header and SQLite connection info
     expect(screen.getByText(/Administrator Command Console/i)).toBeDefined();
-    expect(screen.getByText(/server\/database\.sqlite/i)).toBeDefined();
 
     // Verify metric cards
     await waitFor(() => {
+      expect(screen.getByText(/server\/database\.sqlite/i)).toBeDefined();
       expect(screen.getByText('22')).toBeDefined(); // Total users
       expect(screen.getAllByText('26').length).toBeGreaterThanOrEqual(1); // Metric cards
     });

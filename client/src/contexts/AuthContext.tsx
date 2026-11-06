@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { db } from '../db';
+import { apiUrl } from '../lib/api';
+import { SyncService } from '../SyncService';
 
 export interface AuthUser {
   id: string;
@@ -23,6 +25,7 @@ interface AuthContextType {
   token: string | null;
   isGuest: boolean;
   guestId: string;
+  ownerId: string | null;
   isLoading: boolean;
   error: string | null;
   showTransferModal: boolean;
@@ -49,13 +52,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isGuest, setIsGuest] = useState<boolean>(true);
   const [guestId, setGuestId] = useState<string>('');
+  const [ownerId, setOwnerId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState<boolean>(false);
@@ -64,15 +66,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(authenticatedUser);
     setToken(sessionToken);
     setIsGuest(false);
+    setOwnerId(authenticatedUser.id);
+    localStorage.setItem('climate_justice_user_id', authenticatedUser.id);
+    localStorage.setItem('climate_justice_owner_id', authenticatedUser.id);
     localStorage.setItem('climate_justice_token', sessionToken);
     sessionStorage.setItem('climate_justice_token', sessionToken);
     localStorage.setItem('climate_justice_is_guest', 'false');
   };
 
   const clearSession = () => {
+    const activeGuestId = localStorage.getItem('climate_justice_guest_id') || guestId;
     setUser(null);
     setToken(null);
     setIsGuest(true);
+    setOwnerId(activeGuestId || null);
+    localStorage.removeItem('climate_justice_user_id');
+    if (activeGuestId) localStorage.setItem('climate_justice_owner_id', activeGuestId);
+    else localStorage.removeItem('climate_justice_owner_id');
     localStorage.removeItem('climate_justice_token');
     sessionStorage.removeItem('climate_justice_token');
     localStorage.setItem('climate_justice_is_guest', 'true');
@@ -89,9 +99,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const initAuth = async () => {
       const savedToken = localStorage.getItem('climate_justice_token') || sessionStorage.getItem('climate_justice_token');
+      const savedUserId = localStorage.getItem('climate_justice_user_id');
       if (savedToken) {
         try {
-          const res = await fetch(`${API_BASE}/auth/me`, {
+          const res = await fetch(apiUrl('/auth/me'), {
             headers: { Authorization: `Bearer ${savedToken}` }
           });
           if (res.ok) {
@@ -103,9 +114,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           } else if (res.status === 401) {
             clearSession();
+          } else if (savedUserId) {
+            setOwnerId(savedUserId);
           }
         } catch {
-          // Network offline: retain token in storage but stop loading
+          if (savedUserId) setOwnerId(savedUserId);
         }
       } else {
         clearSession();
@@ -117,15 +130,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initAuth();
   }, []);
 
-  const checkForLocalProgress = async () => {
+  const checkForLocalProgress = async (authenticatedUser: AuthUser) => {
     try {
-      const records = await db.progress.toArray();
-      const hasCompletedLessons = records.some(r => r.completedLessons && r.completedLessons.length > 0);
-      if (hasCompletedLessons) {
+      if (!guestId) return;
+      const [guestProgress, legacyProgress, guestQueue, unassignedQueue] = await Promise.all([
+        db.accountProgress.where('ownerId').equals(guestId).toArray(),
+        db.progress.toArray(),
+        db.syncQueue.where('ownerId').equals(guestId).toArray(),
+        db.syncQueue.filter(record => !record.ownerId).toArray()
+      ]);
+      const untransferredLegacy = await Promise.all(legacyProgress.map(async record => ({
+        record,
+        transferred: await db.transferLog.get(`${authenticatedUser.id}:${record.moduleId}`)
+      })));
+      const hasProgress = guestProgress.length > 0
+        || untransferredLegacy.some(item => !item.transferred && (item.record.completed || item.record.completedLessons.length > 0));
+      if (hasProgress || guestQueue.length > 0 || unassignedQueue.length > 0) {
         setShowTransferModal(true);
       }
-    } catch {
-      // Local DB read failure non-fatal
+    } catch (error) {
+      console.error('Failed to check local progress for transfer', error);
     }
   };
 
@@ -136,7 +160,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
+      const res = await fetch(apiUrl('/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -154,7 +178,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       saveSession(data.user, data.token);
-      await checkForLocalProgress();
+      await checkForLocalProgress(data.user);
       return { success: true };
     } catch (err: any) {
       return { 
@@ -172,7 +196,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; recoveryCode?: string; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const res = await fetch(apiUrl('/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, confirmPassword, name, privacyConsent: true })
@@ -190,7 +214,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       saveSession(data.user, data.token);
-      await checkForLocalProgress();
+      await checkForLocalProgress(data.user);
       return { success: true, recoveryCode: data.recoveryCode };
     } catch (err: any) {
       return { 
@@ -203,7 +227,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loginWithGoogle = async (idToken: string): Promise<{ success: boolean; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/google`, {
+      const res = await fetch(apiUrl('/auth/google'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken })
@@ -214,7 +238,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       saveSession(data.user, data.token);
-      await checkForLocalProgress();
+      await checkForLocalProgress(data.user);
       return { success: true };
     } catch {
       return { success: false, error: 'Failed to verify Google identity. Check your network connection.' };
@@ -230,7 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; recoveryCode?: string; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/phone/register`, {
+      const res = await fetch(apiUrl('/auth/phone/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ countryCode, nationalNumber, password, name, recoveryEmail })
@@ -251,7 +275,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       saveSession(data.user, data.token);
-      await checkForLocalProgress();
+      await checkForLocalProgress(data.user);
       return { success: true, recoveryCode: data.recoveryCode };
     } catch (err: any) {
       return { 
@@ -268,7 +292,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; error?: string }> => {
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/auth/phone/login`, {
+      const res = await fetch(apiUrl('/auth/phone/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ countryCode, nationalNumber, password })
@@ -286,7 +310,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       saveSession(data.user, data.token);
-      await checkForLocalProgress();
+      await checkForLocalProgress(data.user);
       return { success: true };
     } catch (err: any) {
       return { 
@@ -299,7 +323,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateProfile = async (data: { displayName?: string; name?: string; avatarUrl?: string; bio?: string }): Promise<{ success: boolean; user?: AuthUser; error?: string }> => {
     if (!token) return { success: false, error: 'Not authenticated' };
     try {
-      const res = await fetch(`${API_BASE}/auth/profile`, {
+      const res = await fetch(apiUrl('/auth/profile'), {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -321,7 +345,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     if (token) {
       try {
-        await fetch(`${API_BASE}/auth/logout`, {
+        await fetch(apiUrl('/auth/logout'), {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` }
         });
@@ -334,24 +358,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const transferGuestProgress = async (): Promise<{ success: boolean; count: number }> => {
-    if (!token) return { success: false, count: 0 };
+    if (!token || !user || !guestId) return { success: false, count: 0 };
     try {
-      const records = await db.progress.toArray();
-      const res = await fetch(`${API_BASE}/auth/transfer-guest-progress`, {
+      const [guestProgress, legacyProgress, guestLearningTime] = await Promise.all([
+        db.accountProgress.where('ownerId').equals(guestId).toArray(),
+        db.progress.toArray(),
+        db.learningTime.where('ownerId').equals(guestId).toArray()
+      ]);
+      const legacyRecords = await Promise.all(legacyProgress.map(async record => ({
+        record,
+        transferred: await db.transferLog.get(`${user.id}:${record.moduleId}`)
+      })));
+      const progressRecords = [
+        ...guestProgress,
+        ...legacyRecords
+          .filter(item => !item.transferred)
+          .map(({ record }) => ({ ...record, ownerId: undefined }))
+      ];
+      const res = await fetch(apiUrl('/auth/transfer-guest-progress'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ progressRecords: records })
+        body: JSON.stringify({ progressRecords })
       });
       const data = await res.json();
-      setShowTransferModal(false);
       if (res.ok) {
+        await db.transaction('rw', db.accountProgress, db.learningTime, db.syncQueue, db.transferLog, async () => {
+          for (const record of progressRecords) {
+            const existing = await db.accountProgress.get([user.id, record.moduleId]);
+            await db.accountProgress.put({
+              ownerId: user.id,
+              moduleId: record.moduleId,
+              completedLessons: [...new Set([...(existing?.completedLessons || []), ...record.completedLessons])],
+              completed: Boolean(existing?.completed || record.completed),
+              lastAccessed: record.lastAccessed
+            });
+            if (record.ownerId === undefined) {
+              await db.transferLog.put({ id: `${user.id}:${record.moduleId}` });
+            }
+          }
+
+          for (const time of guestLearningTime) {
+            const existing = await db.learningTime.get([user.id, time.date]);
+            await db.learningTime.put({
+              ownerId: user.id,
+              date: time.date,
+              seconds: (existing?.seconds || 0) + time.seconds
+            });
+          }
+
+          await db.syncQueue
+            .filter(record => !record.ownerId || record.ownerId === guestId)
+            .modify({ ownerId: user.id, status: 'pending' });
+        });
+        await db.learningTime.bulkDelete(guestLearningTime.map(time => [guestId, time.date]));
+        await db.accountProgress.bulkDelete(guestProgress.map(record => [guestId, record.moduleId]));
+        await SyncService.syncNow(user.id);
+        window.dispatchEvent(new Event('climate-justice-data-changed'));
+        setShowTransferModal(false);
         return { success: true, count: data.transferredCount || 0 };
       }
+      setShowTransferModal(false);
       return { success: false, count: 0 };
-    } catch {
+    } catch (error) {
+      console.error('Failed to transfer guest progress', error);
       setShowTransferModal(false);
       return { success: false, count: 0 };
     }
@@ -364,7 +436,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const changePassword = async (currentPassword: string, newPassword: string): Promise<{ success: boolean; error?: string }> => {
     if (!token) return { success: false, error: 'Not authenticated' };
     try {
-      const res = await fetch(`${API_BASE}/auth/change-password`, {
+      const res = await fetch(apiUrl('/auth/change-password'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -385,7 +457,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const regenerateRecoveryCode = async (): Promise<{ success: boolean; recoveryCode?: string; error?: string }> => {
     if (!token) return { success: false, error: 'Not authenticated' };
     try {
-      const res = await fetch(`${API_BASE}/auth/regenerate-recovery-code`, {
+      const res = await fetch(apiUrl('/auth/regenerate-recovery-code'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -405,7 +477,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const deleteAccount = async (): Promise<{ success: boolean; error?: string }> => {
     if (!token) return { success: false, error: 'Not authenticated' };
     try {
-      const res = await fetch(`${API_BASE}/auth/account`, {
+      const res = await fetch(apiUrl('/auth/account'), {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
@@ -430,6 +502,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         isGuest,
         guestId,
+        ownerId,
         isLoading,
         error,
         showTransferModal,

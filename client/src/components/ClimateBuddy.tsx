@@ -34,6 +34,7 @@ import {
   type VoiceOption
 } from '../lib/speech';
 import { audioCoordinator } from '../lib/audioCoordinator';
+import { apiUrl } from '../lib/api';
 
 interface ChatMessage {
   id: string;
@@ -106,7 +107,7 @@ export default function ClimateBuddy() {
     setLocalSpeechRate(getSpeechRate());
 
     // Check optional cloud TTS status on server
-    fetch('/api/v1/assistant/tts/status')
+    fetch(apiUrl('/assistant/tts/status'))
       .then(res => res.json())
       .then(data => {
         setCloudTtsInfo(data);
@@ -124,7 +125,7 @@ export default function ClimateBuddy() {
   useEffect(() => {
     const checkOnlineStatus = async () => {
       try {
-        const res = await fetch('/api/v1/assistant/status');
+        const res = await fetch(apiUrl('/assistant/status'));
         if (res.ok) {
           const data = await res.json();
           setOnlineAvailable(Boolean(data.onlineAvailable));
@@ -243,7 +244,7 @@ export default function ClimateBuddy() {
           content: m.text
         }));
 
-        const res = await fetch('/api/v1/assistant/chat', {
+        const res = await fetch(apiUrl('/assistant/chat'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -330,7 +331,7 @@ export default function ClimateBuddy() {
     // 1. Check if cloud neural TTS is available on server
     if (cloudTtsInfo?.available) {
       try {
-        const res = await fetch('/api/v1/assistant/tts', {
+        const res = await fetch(apiUrl('/assistant/tts'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: speechCleanedText, language })
@@ -774,7 +775,7 @@ export default function ClimateBuddy() {
                       <button
                         onClick={async () => {
                           try {
-                            await fetch('/api/v1/assistant/report-error', {
+                            await fetch(apiUrl('/assistant/report-error'), {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({

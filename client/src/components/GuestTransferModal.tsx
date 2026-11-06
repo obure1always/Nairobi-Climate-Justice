@@ -67,8 +67,8 @@ export const GuestTransferModal: React.FC = () => {
           <div className="space-y-4">
             <p className="text-sm text-gray-600 leading-relaxed">
               {isSwahili
-                ? `Umekamilisha masomo ukiwa mgeni kwenye kifaa hiki. Je, ungependa kuunganisha maendeleo haya na akaunti yako ya ${user?.email || ''} ili uyapate kwenye kifaa kingine chochote?`
-                : `You have completed lessons and quiz achievements saved on this device. Would you like to merge them with your account (${user?.email || 'signed in'}) so your learning journey stays synchronized?`}
+                ? `Kifaa hiki kina maendeleo ya mgeni na baadhi ya rekodi za zamani zisizo na mmiliki anayejulikana. Zitahusishwa na akaunti yako ya ${user?.email || ''} tu ukithibitisha uhamisho.`
+                : `This browser has guest progress and older records with no known owner. They will remain unassigned unless you explicitly transfer them to your account (${user?.email || 'signed in'}).`}
             </p>
 
             <div className="p-3.5 bg-emerald-50/70 border border-emerald-100 rounded-2xl text-xs text-emerald-900 space-y-1">

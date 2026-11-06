@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { 
   sequelize, 
+  sqliteDatabasePath,
   setupDb, 
   Participant, 
   Module, 
@@ -19,11 +20,12 @@ import {
   QuizSubmission,
   ProjectSubmission,
   Certificate,
+  CertificateDelivery,
   ImpactAction,
   Notification,
   SupportTicket
 } from './models/index';
-import { processAssistantChat, isOnlineAiConfigured, getActiveProvider, getActiveModel, GROQ_MODEL } from './services/aiAssistant';
+import { processAssistantChat, getActiveProvider, getActiveModel, GROQ_MODEL } from './services/aiAssistant';
 import { 
   hashPassword, 
   verifyPassword, 
@@ -44,9 +46,18 @@ import {
 import { 
   PRACTICAL_PROJECTS, 
   CLIMATE_DATASETS, 
-  AFRICAN_CASE_STUDIES, 
-  issueCertificateForUser 
+  AFRICAN_CASE_STUDIES
 } from './services/learningService';
+import {
+  COURSE_ID,
+  findCourseModule,
+  gradeCourseQuiz,
+  issueCourseCertificateIfComplete,
+  updateModuleCompletion
+} from './services/courseProgress';
+import { COURSE_MODULES } from './services/courseCatalog';
+import { createCertificatePdf } from './services/certificatePdf';
+import { attemptCertificateEmail, attemptPendingCertificateEmails } from './services/certificateEmail';
 
 const app = express();
 app.use(cors());
@@ -66,39 +77,11 @@ if (clientDistPath) {
   app.use(express.static(clientDistPath));
 }
 
-// Extend express Request for participantId, user & admin validation
+// Extend express Request for authenticated user data
 interface AuthenticatedRequest extends Request {
   participantId?: string;
-  isAdmin?: boolean;
   user?: User;
 }
-
-// Participant Authentication Middleware
-const requireParticipantAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or malformed Bearer token' });
-  }
-
-  const token = authHeader.substring(7).trim();
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized: Empty authorization token' });
-  }
-
-  try {
-    const user = await validateSession(token);
-    if (user) {
-      req.user = user;
-      req.participantId = user.participantId || user.id;
-      return next();
-    }
-  } catch {
-    // Non-session token: proceed to check as raw participant token
-  }
-
-  req.participantId = token;
-  next();
-};
 
 // Registered User Authentication Middleware
 const requireUserAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -136,41 +119,6 @@ const requireRoles = (allowedRoles: string[]) => {
       next();
     });
   };
-};
-
-// Admin Authorization Middleware for research dataset export
-const requireAdminAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Admin authorization required' });
-  }
-
-  const token = authHeader.substring(7).trim();
-
-  // Check if token belongs to an authentic user session with admin role
-  const user = await validateSession(token);
-  if (user && user.role === 'admin') {
-    req.isAdmin = true;
-    req.user = user;
-    return next();
-  }
-
-  // Check if token matches server-configured admin export key
-  const configuredAdminKey = process.env.ADMIN_EXPORT_SECRET || process.env.ADMIN_SECRET_KEY;
-  const isTest = process.env.NODE_ENV === 'test';
-
-  if (!configuredAdminKey && !isTest) {
-    console.error('Security alert: Admin export key is not configured in server environment.');
-    return res.status(503).json({ error: 'Service Unavailable: Server-side admin authorization is not configured' });
-  }
-
-  const isValidToken = (isTest && token === 'ADMIN-TEST') || token === configuredAdminKey;
-  if (!isValidToken) {
-    return res.status(403).json({ error: 'Forbidden: Invalid administrator credentials' });
-  }
-
-  req.isAdmin = true;
-  next();
 };
 
 // Health and Root Endpoint (No hardcoded credentials exposed)
@@ -218,13 +166,41 @@ app.get('/api/v1/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Climate Buddy Online AI Status Endpoint
-app.get('/api/v1/assistant/status', (_req: Request, res: Response) => {
-  res.json({
-    onlineAvailable: isOnlineAiConfigured(),
-    provider: getActiveProvider(),
-    model: getActiveModel(),
-    freeTier: true
+// Report online availability only after a real provider response.
+let assistantStatusCache: {
+  checkedAt: number;
+  onlineAvailable: boolean;
+  provider: string;
+  model: string;
+} | null = null;
+app.get('/api/v1/assistant/status', async (_req: Request, res: Response) => {
+  if (!assistantStatusCache || Date.now() - assistantStatusCache.checkedAt > 60_000) {
+    try {
+      const result = await processAssistantChat({
+        message: 'Reply with the single word OK.',
+        language: 'en'
+      });
+      assistantStatusCache = {
+        checkedAt: Date.now(),
+        onlineAvailable: result.mode === 'online' && !result.fallbackToOffline && Boolean(result.answer.trim()),
+        provider: getActiveProvider(),
+        model: result.model || getActiveModel()
+      };
+    } catch (error) {
+      console.warn('Climate Buddy provider health check failed.');
+      assistantStatusCache = {
+        checkedAt: Date.now(),
+        onlineAvailable: false,
+        provider: getActiveProvider(),
+        model: getActiveModel()
+      };
+    }
+  }
+  return res.json({
+    onlineAvailable: assistantStatusCache.onlineAvailable,
+    provider: assistantStatusCache.provider,
+    model: assistantStatusCache.model,
+    freeTier: assistantStatusCache.provider === 'free-online'
   });
 });
 
@@ -314,6 +290,7 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
         user: {
           id: user.id,
           email: user.email,
+          emailVerified: user.emailVerified,
           name: user.name,
           displayName: user.name,
           role: user.role,
@@ -352,12 +329,18 @@ app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
     }
 
     const user = await User.findOne({ where: { email: String(email).trim().toLowerCase() } });
-    if (!user || user.authProvider !== 'email' || !user.passwordHash || !user.passwordSalt) {
+    if (!user) {
+      console.warn('[auth.login] account_not_found');
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    if (user.authProvider !== 'email' || !user.passwordHash || !user.passwordSalt) {
+      console.warn('[auth.login] different_sign_in_method');
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     const isValid = verifyPassword(password, user.passwordHash, user.passwordSalt);
     if (!isValid) {
+      console.warn('[auth.login] password_check_failed');
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
@@ -368,6 +351,7 @@ app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
+        emailVerified: user.emailVerified,
         name: user.name,
         displayName: user.name,
         avatarUrl: user.avatarUrl,
@@ -377,7 +361,8 @@ app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
       token
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+    console.error('[auth.login] authentication service error', err);
+    return res.status(500).json({ error: 'Authentication failed' });
   }
 });
 
@@ -395,19 +380,29 @@ app.post('/api/v1/auth/google', async (req: Request, res: Response) => {
     }
 
     let user = await User.findOne({ where: { googleSubjectId: payload.sub } });
-    
     if (!user && payload.email) {
-      user = await User.findOne({ where: { email: payload.email.toLowerCase() } });
+      const emailAccount = await User.findOne({ where: { email: payload.email.toLowerCase() } });
+      if (emailAccount && !payload.email_verified) {
+        return res.status(403).json({ error: 'Google must verify this email address before it can be linked.' });
+      }
+      user = emailAccount;
       if (user) {
         user.googleSubjectId = payload.sub;
-        if (payload.picture && !user.avatarUrl) user.avatarUrl = payload.picture;
-        await user.save();
+        user.emailVerified = true;
       }
+    }
+
+    if (user && payload.email_verified) {
+      user.emailVerified = true;
+      if (!user.email && payload.email) user.email = payload.email.toLowerCase();
+      if (payload.picture && !user.avatarUrl) user.avatarUrl = payload.picture;
+      await user.save();
     }
 
     if (!user) {
       user = await User.create({
         email: payload.email ? payload.email.toLowerCase() : null,
+        emailVerified: Boolean(payload.email_verified),
         googleSubjectId: payload.sub,
         name: payload.name || 'Google Learner',
         avatarUrl: payload.picture || null,
@@ -423,6 +418,7 @@ app.post('/api/v1/auth/google', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
+        emailVerified: user.emailVerified,
         name: user.name,
         displayName: user.name,
         avatarUrl: user.avatarUrl,
@@ -458,7 +454,7 @@ app.get('/api/v1/auth/me', requireUserAuth, async (req: AuthenticatedRequest, re
     user: {
       id: user.id,
       email: user.email,
-      emailVerified: user.authProvider === 'google',
+      emailVerified: user.emailVerified,
       phone: user.phone,
       phoneVerified: Boolean(user.phoneVerified),
       name: user.name,
@@ -495,7 +491,7 @@ app.patch(['/api/v1/auth/profile', '/api/v1/user/profile'], requireUserAuth, asy
       user: {
         id: user.id,
         email: user.email,
-        emailVerified: user.authProvider === 'google',
+        emailVerified: user.emailVerified,
         phone: user.phone,
         phoneVerified: Boolean(user.phoneVerified),
         name: user.name,
@@ -697,7 +693,7 @@ app.post('/api/v1/auth/transfer-guest-progress', requireUserAuth, async (req: Au
       });
 
       if (completedCount > modProgress.completedLessons) {
-        modProgress.completedLessons = completedCount;
+        modProgress.completedLessons = Math.max(modProgress.completedLessons || 0, completedCount);
       }
       if (record.completed) {
         modProgress.completed = true;
@@ -724,86 +720,130 @@ app.get('/api/v1/modules', async (_req: Request, res: Response) => {
 });
 
 // Synchronize offline progress and assessments (Idempotent, transactional)
-app.post('/api/v1/sync', requireParticipantAuth, async (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/v1/sync', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
   const { records } = req.body;
-  const participantId = req.participantId;
+  const userId = req.user!.id;
+  const participantId = req.user!.participantId || `USER-${userId.substring(0, 8)}`;
 
-  if (!Array.isArray(records)) {
-    return res.status(400).json({ error: 'Bad Request: "records" must be an array' });
+  if (!Array.isArray(records) || records.length > 500) {
+    return res.status(400).json({ error: 'Bad Request: "records" must be an array of at most 500 events' });
   }
 
   const processedIds: string[] = [];
   const failedIds: string[] = [];
 
-  const transaction = await sequelize.transaction();
-  try {
-    for (const record of records) {
-      if (!record || !record.clientEventId || !record.entityType || !record.entityData) {
-        if (record?.clientEventId) failedIds.push(record.clientEventId);
-        continue;
-      }
+  for (const record of records) {
+    const clientEventId = typeof record?.clientEventId === 'string' ? record.clientEventId : '';
+    if (
+      !clientEventId
+      || record.ownerId !== userId
+      || !record.entityData
+      || !['PROGRESS', 'ASSESSMENT', 'QUIZ_ATTEMPT'].includes(record.entityType)
+    ) {
+      if (clientEventId) failedIds.push(clientEventId);
+      continue;
+    }
 
-      const { clientEventId, entityType, entityData } = record;
-      
-      // Idempotency check: avoid double-processing identical offline events
-      const existing = await SyncRecord.findOne({ where: { clientEventId }, transaction });
-      if (existing) {
-        processedIds.push(clientEventId);
-        continue;
-      }
+    const existing = await SyncRecord.findOne({ where: { clientEventId } });
+    if (existing) {
+      (existing.userId === userId ? processedIds : failedIds).push(clientEventId);
+      continue;
+    }
 
-      await SyncRecord.create({
-        participantId: participantId!,
-        clientEventId,
-        entityType,
-        entityData,
-        status: 'processed'
-      }, { transaction });
-
-      // Process specific entity changes safely
+    const transaction = await sequelize.transaction();
+    let issuedCertificate: Certificate | null = null;
+    try {
+      const { entityType, entityData } = record;
       if (entityType === 'PROGRESS') {
-        const { moduleId, completedLessons, completed } = entityData;
-        const [progress] = await ModuleProgress.findOrCreate({
-          where: { participantId: participantId!, moduleId: String(moduleId) },
-          defaults: { 
-            completedLessons: Array.isArray(completedLessons) ? completedLessons.length : Number(completedLessons) || 0, 
-            completed: Boolean(completed), 
-            lastAccessed: new Date(), 
-            participantId: participantId!, 
-            moduleId: String(moduleId) 
+        const moduleId = typeof entityData.moduleId === 'string' ? entityData.moduleId : '';
+        const courseModule = findCourseModule(moduleId);
+        if (!courseModule || !Array.isArray(entityData.completedLessons)) throw new Error('Invalid progress module');
+        for (const lessonIndex of entityData.completedLessons) {
+          if (!Number.isInteger(lessonIndex) || lessonIndex < 0 || lessonIndex >= courseModule.lessons.length) {
+            throw new Error('Invalid completed lesson index');
+          }
+          const lessonId = courseModule.lessons[lessonIndex];
+          const [lessonProgress] = await LessonProgress.findOrCreate({
+            where: { userId, moduleId, lessonId },
+            defaults: {
+              userId,
+              moduleId,
+              lessonId,
+              completed: true,
+              playbackSeconds: 0,
+              notes: null,
+              lastAccessedAt: new Date()
+            },
+            transaction
+          });
+          if (!lessonProgress.completed) {
+            lessonProgress.completed = true;
+            lessonProgress.lastAccessedAt = new Date();
+            await lessonProgress.save({ transaction });
+          }
+        }
+        await updateModuleCompletion(userId, moduleId, transaction);
+        issuedCertificate = await issueCourseCertificateIfComplete(userId, transaction);
+      } else if (entityType === 'QUIZ_ATTEMPT') {
+        const moduleId = typeof entityData.moduleId === 'string' ? entityData.moduleId : '';
+        const answers = entityData.answers;
+        const grade = gradeCourseQuiz(moduleId, answers);
+        if (!grade) throw new Error('Invalid quiz attempt');
+        const [submission] = await QuizSubmission.findOrCreate({
+          where: { userId, clientEventId },
+          defaults: {
+            userId,
+            moduleId,
+            clientEventId,
+            pathwayId: COURSE_ID,
+            score: grade.score,
+            passed: grade.passed,
+            totalQuestions: grade.totalQuestions,
+            answers
           },
           transaction
         });
-
-        const newLessonsCount = Array.isArray(completedLessons) ? completedLessons.length : Number(completedLessons) || 0;
-        if (newLessonsCount > progress.completedLessons) {
-          progress.completedLessons = newLessonsCount;
-        }
-        if (completed) progress.completed = true;
-        progress.lastAccessed = new Date();
-        await progress.save({ transaction });
-      } else if (entityType === 'ASSESSMENT') {
-        const { questionId, answer } = entityData;
+        await updateModuleCompletion(userId, submission.moduleId, transaction);
+        issuedCertificate = await issueCourseCertificateIfComplete(userId, transaction);
+      } else {
+        const questionId = typeof entityData.questionId === 'string' ? entityData.questionId : '';
+        if (!questionId || entityData.answer === undefined) throw new Error('Invalid assessment event');
         await AssessmentResponse.create({
-          participantId: participantId!,
-          questionId: String(questionId),
-          answer: String(answer)
+          participantId,
+          questionId,
+          answer: String(entityData.answer)
         }, { transaction });
       }
 
-      processedIds.push(clientEventId);
+      await SyncRecord.create({
+        participantId,
+        userId,
+        clientEventId,
+        entityType: record.entityType,
+        entityData: record.entityData,
+        status: 'processed'
+      }, { transaction });
+      await transaction.commit();
+    } catch {
+      await transaction.rollback();
+      console.error('[sync] event_save_failed', { userId, clientEventId });
+      const savedRetry = await SyncRecord.findOne({ where: { clientEventId } });
+      (savedRetry?.userId === userId ? processedIds : failedIds).push(clientEventId);
+      continue;
     }
-    
-    await transaction.commit();
-    res.json({ processedIds, failedIds });
-  } catch (err: any) {
-    await transaction.rollback();
-    res.status(500).json({ error: err.message });
+
+    processedIds.push(clientEventId);
+    if (issuedCertificate) {
+      await attemptCertificateEmail(issuedCertificate.id).catch(error => {
+        console.error('[certificate.email] post_sync_attempt_failed', error);
+      });
+    }
   }
+  res.json({ processedIds, failedIds });
 });
 
-// Admin export endpoint (Protected by requireAdminAuth, de-identified dataset)
-app.get('/api/v1/admin/export', requireAdminAuth, async (_req: AuthenticatedRequest, res: Response) => {
+// Research export requires the same administrator role as the dashboard.
+app.get('/api/v1/admin/export', requireRoles(['admin']), async (_req: AuthenticatedRequest, res: Response) => {
   try {
     const participants = await Participant.findAll({
       attributes: ['id', 'ageGroup', 'location', 'educationStatus', 'gender', 'createdAt']
@@ -828,7 +868,6 @@ app.get('/api/v1/admin/dashboard', requireRoles(['admin']), async (_req: Authent
     const [
       users,
       participants,
-      modules,
       moduleProgresses,
       lessonProgresses,
       certificates,
@@ -844,7 +883,6 @@ app.get('/api/v1/admin/dashboard', requireRoles(['admin']), async (_req: Authent
         order: [['createdAt', 'DESC']]
       }),
       Participant.findAll({ order: [['createdAt', 'DESC']] }),
-      Module.findAll({ order: [['order', 'ASC']] }),
       ModuleProgress.findAll({ order: [['lastAccessed', 'DESC']] }),
       LessonProgress.findAll({ order: [['lastAccessedAt', 'DESC']] }),
       Certificate.findAll({ order: [['createdAt', 'DESC']] }),
@@ -937,13 +975,17 @@ app.get('/api/v1/admin/dashboard', requireRoles(['admin']), async (_req: Authent
 
     // Sort combined activity descending
     activity.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const totalLessonCompletions = Math.max(
+      lessonProgresses.filter(lp => lp.completed).length,
+      moduleProgresses.reduce((total, record) => total + (Number(record.completedLessons) || 0), 0)
+    );
 
     res.json({
       success: true,
       stats: {
         totalUsers: users.length,
         totalParticipants: participants.length,
-        totalLessonCompletions: lessonProgresses.filter(lp => lp.completed).length,
+        totalLessonCompletions,
         totalCertificates: certificates.length,
         totalProjectSubmissions: projectSubmissions.length,
         totalActiveSessions: userSessionsCount,
@@ -951,12 +993,17 @@ app.get('/api/v1/admin/dashboard', requireRoles(['admin']), async (_req: Authent
       },
       database: {
         dialect: 'sqlite',
-        storage: 'server/database.sqlite',
+        storage: sqliteDatabasePath,
         connected: true,
         tableCount: 21
       },
       users,
-      modules,
+      modules: COURSE_MODULES.map((module, index) => ({
+        id: module.id,
+        order: index + 1,
+        title: module.title,
+        description: `${module.lessons.length} required lessons and ${module.questions.length} quiz questions`
+      })),
       moduleProgresses,
       lessonProgresses,
       certificates,
@@ -1039,49 +1086,44 @@ app.post('/api/v1/learning/progress', requireUserAuth, async (req: Authenticated
     if (!moduleId || !lessonId) {
       return res.status(400).json({ error: 'moduleId and lessonId are required' });
     }
+    const courseModule = findCourseModule(String(moduleId));
+    if (!courseModule || !courseModule.lessons.includes(String(lessonId))) {
+      return res.status(400).json({ error: 'Unknown course module or lesson' });
+    }
 
-    const [lp] = await LessonProgress.findOrCreate({
-      where: { userId, moduleId: String(moduleId), lessonId: String(lessonId) },
-      defaults: {
-        userId,
-        moduleId: String(moduleId),
-        lessonId: String(lessonId),
-        completed: Boolean(completed),
-        playbackSeconds: Number(playbackSeconds) || 0,
-        notes: notes || null,
-        lastAccessedAt: new Date()
-      }
+    const result = await sequelize.transaction(async transaction => {
+      const [lessonProgress] = await LessonProgress.findOrCreate({
+        where: { userId, moduleId: String(moduleId), lessonId: String(lessonId) },
+        defaults: {
+          userId,
+          moduleId: String(moduleId),
+          lessonId: String(lessonId),
+          completed: Boolean(completed),
+          playbackSeconds: Number(playbackSeconds) || 0,
+          notes: notes || null,
+          lastAccessedAt: new Date()
+        },
+        transaction
+      });
+
+      if (completed !== undefined) lessonProgress.completed = Boolean(completed);
+      if (playbackSeconds !== undefined) lessonProgress.playbackSeconds = Number(playbackSeconds);
+      if (notes !== undefined) lessonProgress.notes = notes;
+      lessonProgress.lastAccessedAt = new Date();
+      await lessonProgress.save({ transaction });
+
+      const moduleProgress = await updateModuleCompletion(userId, String(moduleId), transaction);
+      const certificate = await issueCourseCertificateIfComplete(userId, transaction);
+      return { lessonProgress, moduleProgress, certificate };
     });
 
-    if (completed !== undefined) lp.completed = Boolean(completed);
-    if (playbackSeconds !== undefined) lp.playbackSeconds = Number(playbackSeconds);
-    if (notes !== undefined) lp.notes = notes;
-    lp.lastAccessedAt = new Date();
-    await lp.save();
-
-    // Aggregate into ModuleProgress
-    const completedCount = await LessonProgress.count({
-      where: { userId, moduleId: String(moduleId), completed: true }
+    if (result.certificate) await attemptCertificateEmail(result.certificate.id);
+    return res.json({
+      success: true,
+      lessonProgress: result.lessonProgress,
+      moduleProgress: result.moduleProgress,
+      certificate: result.certificate
     });
-
-    const [modProgress] = await ModuleProgress.findOrCreate({
-      where: { userId, moduleId: String(moduleId) },
-      defaults: {
-        userId,
-        participantId: `USER-${userId.substring(0, 8)}`,
-        moduleId: String(moduleId),
-        completedLessons: completedCount,
-        completed: completedCount >= 3,
-        lastAccessed: new Date()
-      }
-    });
-
-    modProgress.completedLessons = completedCount;
-    if (completedCount >= 3) modProgress.completed = true;
-    modProgress.lastAccessed = new Date();
-    await modProgress.save();
-
-    return res.json({ success: true, lessonProgress: lp, moduleProgress: modProgress });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1200,35 +1242,57 @@ app.post('/api/v1/learning/questions/:id/answer', requireRoles(['instructor', 'a
 app.post('/api/v1/assessments/submit', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const { moduleId, pathwayId, answers, score, totalQuestions, feedback } = req.body;
-
-    if (!moduleId || score === undefined) {
-      return res.status(400).json({ error: 'moduleId and score are required' });
+    const { moduleId, answers, clientEventId } = req.body;
+    if (typeof moduleId !== 'string' || typeof clientEventId !== 'string' || !clientEventId.trim()) {
+      return res.status(400).json({ error: 'moduleId and clientEventId are required' });
+    }
+    const grade = gradeCourseQuiz(moduleId, answers);
+    if (!grade) {
+      return res.status(400).json({ error: 'Quiz answers are invalid for this course module' });
     }
 
-    const finalScore = Number(score);
-    const total = Number(totalQuestions) || 5;
-    const passed = (finalScore / total) >= 0.70;
+    const result = await sequelize.transaction(async transaction => {
+      const existing = await QuizSubmission.findOne({
+        where: { userId, clientEventId },
+        transaction
+      });
+      if (existing) {
+        const existingCertificate = await Certificate.findOne({
+          where: { userId, pathwayId: COURSE_ID },
+          transaction
+        });
+        return { submission: existing, certificate: existingCertificate, duplicate: true, moduleProgress: null };
+      }
 
-    const submission = await QuizSubmission.create({
-      userId,
-      moduleId,
-      pathwayId: pathwayId || null,
-      score: finalScore,
-      passed,
-      totalQuestions: total,
-      answers,
-      feedback
+      const submission = await QuizSubmission.create({
+        userId,
+        moduleId,
+        clientEventId,
+        pathwayId: COURSE_ID,
+        score: grade.score,
+        passed: grade.passed,
+        totalQuestions: grade.totalQuestions,
+        answers
+      }, { transaction });
+      const moduleProgress = await updateModuleCompletion(userId, moduleId, transaction);
+      const certificate = await issueCourseCertificateIfComplete(userId, transaction);
+      return { submission, certificate, moduleProgress, duplicate: false };
     });
+
+    if (result.certificate && !result.duplicate) {
+      await attemptCertificateEmail(result.certificate.id);
+    }
 
     return res.status(201).json({
       success: true,
-      submissionId: submission.id,
-      score: finalScore,
-      totalQuestions: total,
-      percentage: Math.round((finalScore / total) * 100),
-      passed,
-      feedback
+      submissionId: result.submission.id,
+      score: result.submission.score,
+      totalQuestions: result.submission.totalQuestions,
+      percentage: Math.round((result.submission.score / result.submission.totalQuestions) * 100),
+      passed: result.submission.passed,
+      duplicate: result.duplicate,
+      moduleProgress: result.moduleProgress,
+      certificate: result.certificate
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1368,12 +1432,21 @@ app.post('/api/v1/instructor/projects/:id/grade', requireRoles(['instructor', 'a
 app.post('/api/v1/certificates/issue', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const { pathwayId, pathwayTitle, skills } = req.body;
-    const result = await issueCertificateForUser(userId, pathwayId, pathwayTitle, skills);
-    if (!result.success) {
-      return res.status(400).json(result);
+    const certificate = await sequelize.transaction(transaction =>
+      issueCourseCertificateIfComplete(userId, transaction)
+    );
+    if (!certificate) {
+      return res.status(409).json({
+        success: false,
+        error: 'Complete every required lesson and pass every module quiz before issuing a certificate.'
+      });
     }
-    return res.json(result);
+    const delivery = await attemptCertificateEmail(certificate.id);
+    return res.json({
+      success: true,
+      certificate,
+      emailDeliveryStatus: delivery?.status || 'not_sent'
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1386,11 +1459,80 @@ app.get('/api/v1/certificates/my-certificates', requireUserAuth, async (req: Aut
       where: { userId },
       order: [['issueDate', 'DESC']]
     });
-    return res.json(certificates);
+    for (const certificate of certificates) {
+      if (certificate.pathwayId === COURSE_ID) {
+        await issueCourseCertificateIfComplete(userId);
+      }
+      await attemptCertificateEmail(certificate.id);
+    }
+    const deliveries = await CertificateDelivery.findAll({
+      where: { userId }
+    });
+    const statusByCertificateId = new Map(
+      deliveries.map(delivery => [delivery.certificateId, delivery.status])
+    );
+    return res.json(certificates.map(certificate => ({
+      ...certificate.toJSON(),
+      emailDeliveryStatus: statusByCertificateId.get(certificate.id) || 'not_sent'
+    })));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
+
+app.get('/api/v1/certificates/:certId/pdf', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const certificate = await Certificate.findOne({
+      where: { id: req.params.certId, userId: req.user!.id }
+    });
+    if (!certificate) return res.status(404).json({ error: 'Certificate not found' });
+    const pdf = await createCertificatePdf(certificate);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${certificate.id}.pdf"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.send(pdf);
+  } catch (error) {
+    console.error('[certificate.pdf] generation_failed', {
+      certificateId: req.params.certId,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    return res.status(503).json({
+      error: 'Certificate PDF generation is unavailable. Check the private certificate signature and font assets.'
+    });
+  }
+});
+
+app.post(
+  '/api/v1/certificates/:certId/email/retry',
+  requireUserAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const certificate = await Certificate.findOne({
+      where: { id: req.params.certId, userId: req.user!.id }
+    });
+    if (!certificate) return res.status(404).json({ error: 'Certificate not found' });
+
+    const delivery = await CertificateDelivery.findOne({
+      where: { certificateId: certificate.id, userId: req.user!.id }
+    });
+    if (!delivery) return res.status(404).json({ error: 'Certificate email delivery record not found' });
+    if (delivery.status !== 'failed') {
+      return res.status(409).json({
+        error: 'Only failed certificate email deliveries can be retried.',
+        emailDeliveryStatus: delivery.status
+      });
+    }
+
+    const result = await attemptCertificateEmail(certificate.id, undefined, true);
+    if (!result || result.status === 'failed') {
+      return res.status(502).json({
+        success: false,
+        error: 'Certificate email delivery failed. The certificate remains available to download.',
+        emailDeliveryStatus: result?.status || 'failed'
+      });
+    }
+    return res.json({ success: true, emailDeliveryStatus: result.status });
+  }
+);
 
 // Public certificate verification endpoint (Unprotected for QR codes and employer/academic verification)
 app.get('/api/v1/certificates/verify/:certId', async (req: Request, res: Response) => {
@@ -1426,6 +1568,53 @@ app.get('/api/v1/certificates/verify/:certId', async (req: Request, res: Respons
 // 7. Interactive Climate Data & African Case Studies
 app.get('/api/v1/climate/datasets', (_req: Request, res: Response) => {
   return res.json(CLIMATE_DATASETS);
+});
+
+app.get('/api/v1/climate/nairobi-power', async (_req: Request, res: Response) => {
+  const sourceUrl = 'https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,T2M&community=AG&longitude=36.8219&latitude=-1.2921&start=20250101&end=20250107&format=JSON';
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) {
+      return res.status(502).json({ error: `NASA POWER returned HTTP ${response.status}` });
+    }
+    const data = await response.json() as {
+      geometry?: { coordinates?: number[] };
+      header?: { sources?: string[]; start?: string; end?: string };
+      parameters?: Record<string, { units?: string; longname?: string }>;
+      properties?: { parameter?: Record<string, Record<string, number>> };
+    };
+    const rainfall = data.properties?.parameter?.PRECTOTCORR;
+    const temperature = data.properties?.parameter?.T2M;
+    if (!rainfall || !temperature || !data.geometry?.coordinates) {
+      return res.status(502).json({ error: 'NASA POWER response did not contain the requested Nairobi parameters' });
+    }
+    const records = Object.keys(rainfall).flatMap(date => {
+      const precipitation = rainfall[date];
+      const temperatureC = temperature[date];
+      if (precipitation === undefined || temperatureC === undefined ||
+          precipitation === -999 || temperatureC === -999) return [];
+      return [{ date, precipitation, temperatureC }];
+    });
+    return res.json({
+      sourceUrl,
+      dataset: data.header?.sources?.join(', ') || 'NASA POWER',
+      location: {
+        name: 'Nairobi, Kenya (POWER point)',
+        longitude: data.geometry.coordinates[0],
+        latitude: data.geometry.coordinates[1],
+        elevationMeters: data.geometry.coordinates[2]
+      },
+      dates: { start: data.header?.start || '20250101', end: data.header?.end || '20250107' },
+      parameters: {
+        precipitation: data.parameters?.PRECTOTCORR,
+        temperature: data.parameters?.T2M
+      },
+      records
+    });
+  } catch (error) {
+    console.error('Could not retrieve the NASA POWER Nairobi dataset', error);
+    return res.status(502).json({ error: 'NASA POWER data is currently unavailable. Try again later.' });
+  }
 });
 
 app.get('/api/v1/climate/case-studies', (_req: Request, res: Response) => {
@@ -1663,115 +1852,32 @@ app.get('/api/v1/support/tickets', async (req: Request, res: Response) => {
   }
 });
 
-const seedDemoAccounts = async () => {
-  const adminEmail = 'admin@climatejustice.ke';
-  const instructorEmail = 'instructor@climatejustice.ke';
-  const learnerEmail = 'learner@climatejustice.ke';
-
-  const defaultPassword = 'Password123!';
-  const { hash, salt } = hashPassword(defaultPassword);
-
-  // Admin
-  const admin = await User.findOne({ where: { email: adminEmail } });
-  if (!admin) {
-    await User.create({
-      email: adminEmail,
-      name: 'Dr. John Obure (Admin)',
-      passwordHash: hash,
-      passwordSalt: salt,
-      authProvider: 'email',
-      role: 'admin',
-      title: 'Platform Director & Curriculum Lead',
-      institution: 'Climate Justice Nairobi'
-    });
+const setupFirstAdmin = async () => {
+  const existingAdmin = await User.findOne({ where: { role: 'admin' } });
+  if (existingAdmin) return;
+  const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.INITIAL_ADMIN_PASSWORD;
+  if (!email || !password) {
+    console.warn('No administrator exists. Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD for first-admin setup.');
+    return;
   }
-
-  // Instructor
-  const instructor = await User.findOne({ where: { email: instructorEmail } });
-  if (!instructor) {
-    await User.create({
-      email: instructorEmail,
-      name: 'Dr. Wanjiku Muthoni (Instructor)',
-      passwordHash: hash,
-      passwordSalt: salt,
-      authProvider: 'email',
-      role: 'instructor',
-      title: 'Senior Climatologist & Lead Instructor',
-      institution: 'Climate Justice Nairobi',
-      expertise: 'Climate Adaptation, Spatial Modeling & Urban Resiliency'
-    });
+  if (password.length < 14) {
+    throw new Error('INITIAL_ADMIN_PASSWORD must be at least 14 characters');
   }
-
-  // Learner
-  const learner = await User.findOne({ where: { email: learnerEmail } });
-  let aminaId: string;
-  if (!learner) {
-    const created = await User.create({
-      email: learnerEmail,
-      phone: '+254712345678',
-      phoneVerified: true,
-      name: 'Amina Wanjiku (Learner)',
-      passwordHash: hash,
-      passwordSalt: salt,
-      authProvider: 'email',
-      role: 'learner',
-      institution: 'Nairobi Community Climate Action Network'
-    });
-    aminaId = created.id;
-  } else {
-    aminaId = learner.id;
-  }
-
-  // Seed Verified Demo Certificate for public URL verification
-  const demoCert = await Certificate.findByPk('CJN-2026-DEMO');
-  if (!demoCert) {
-    await Certificate.create({
-      id: 'CJN-2026-DEMO',
-      userId: aminaId,
-      learnerName: 'Amina Wanjiku',
-      courseTitle: 'Climate Science Fundamentals & Nairobi Adaptation',
-      pathwayId: 'pathway-fundamentals',
-      issuingOrg: 'Climate Justice Nairobi',
-      instructorName: 'John Obure',
-      instructorTitle: 'Climate Activist and Founder',
-      issueDate: new Date('2026-10-28'),
-      skills: [
-        'Decadal Climate Trajectory Analysis (KMD)',
-        'Nairobi Urban Heat Island Mapping',
-        'Community Flood Hazard Assessment',
-        'IPCC Tier-1 Carbon Footprint Estimation'
-      ],
-      verificationUrl: '/verify/CJN-2026-DEMO',
-      distinction: 'Honors Distinction'
-    });
-  } else {
-    demoCert.instructorName = 'John Obure';
-    demoCert.instructorTitle = 'Climate Activist and Founder';
-    await demoCert.save();
-  }
-
-  // Seed sample graded project submission
-  const demoSub = await ProjectSubmission.findOne({ where: { projectId: 'proj-carbon-footprint', userId: aminaId } });
-  if (!demoSub) {
-    await ProjectSubmission.create({
-      userId: aminaId,
-      projectId: 'proj-carbon-footprint',
-      projectType: 'carbon-audit',
-      title: 'Household & Micro-Enterprise Carbon Footprint Assessment in Mathare',
-      summary: 'A localized carbon audit assessing household LPG, matatu commuting, and organic waste diversion in Mathare 4A.',
-      fileUrl: 'https://climatejustice.ke/submissions/mathare-carbon-audit.pdf',
-      status: 'graded',
-      score: 92,
-      rubricScores: { methodology: 28, calculations: 27, impact: 19, feasibility: 18 },
-      instructorFeedback: 'Outstanding application of local Kenyan emission factors. Clear and realistic household waste diversion plan. Meets all evaluation criteria for environmental certification.',
-      gradedBy: 'Dr. Wanjiku Muthoni',
-      gradedAt: new Date()
-    });
-  }
+  const { hash, salt } = hashPassword(password);
+  await User.create({
+    email,
+    name: 'Platform Administrator',
+    passwordHash: hash,
+    passwordSalt: salt,
+    authProvider: 'email',
+    role: 'admin',
+    institution: 'Climate Justice Nairobi'
+  });
+  console.log('Initial administrator account created from environment configuration.');
 };
 
 const seedModules = async () => {
-  await seedDemoAccounts();
   const count = await Module.count();
   if (count === 0) {
     await Module.bulkCreate([
@@ -1809,8 +1915,13 @@ export const startServer = async () => {
   await setupDb();
   await seedModules();
   if (process.env.NODE_ENV !== 'test') {
+    await setupFirstAdmin();
     app.listen(PORT, () => {
+      console.log(`SQLite database: ${sqliteDatabasePath}`);
       console.log(`Server listening on port ${PORT}`);
+      void attemptPendingCertificateEmails().catch(error => {
+        console.error('[certificate.email] startup_retry_failed', error);
+      });
     });
   }
 };

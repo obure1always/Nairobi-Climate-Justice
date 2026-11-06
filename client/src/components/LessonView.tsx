@@ -3,6 +3,8 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
 import { useAuth } from '../contexts/AuthContext';
+import { apiUrl } from '../lib/api';
+import { SyncService } from '../SyncService';
 import { modules } from '../data/modules';
 import { getLessonMedia, estimateReadingTimeMinutes } from '../data/lessonMedia';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -37,6 +39,7 @@ import {
 import { QuizEngine } from './QuizEngine';
 import MarkdownRenderer from './MarkdownRenderer';
 import { generateComprehensiveStudyNotes } from '../lib/studyNotes';
+import { downloadModulePdf, downloadStudyNotesPdf } from '../lib/pdfDocuments';
 import { 
   speakText, 
   pauseSpeech, 
@@ -66,11 +69,24 @@ export default function LessonView() {
   
   const isSwahili = language === 'sw';
   const currentModules = modules[language];
-  const moduleData = currentModules.find(m => m.id === moduleId);
+  const foundModuleData = currentModules.find(m => m.id === moduleId);
+  const moduleData = foundModuleData || currentModules[0];
   
   const [viewState, setViewState] = useState<'intro' | 'lesson' | 'quiz_start' | 'quiz_active' | 'results'>('intro');
   const [currentLessonIndex, setCurrentLessonIndex] = useState(0);
   const [quizScore, setQuizScore] = useState(0);
+  const [quizPassed, setQuizPassed] = useState<boolean | null>(null);
+  const [quizPending, setQuizPending] = useState(false);
+  const [pendingQuizEventId, setPendingQuizEventId] = useState<string | null>(null);
+  const [certificateId, setCertificateId] = useState<string | null>(null);
+  const [pdfDownloadError, setPdfDownloadError] = useState<string | null>(null);
+  const [quizAttempts, setQuizAttempts] = useState<Array<{
+    id: string;
+    score: number;
+    totalQuestions: number;
+    passed: boolean;
+    createdAt: string;
+  }>>([]);
 
   // Active Coursera-style tab
   const [activeTab, setActiveTab] = useState<'content' | 'transcript' | 'notes' | 'qa'>('content');
@@ -178,7 +194,7 @@ export default function LessonView() {
     const lessonId = moduleData.content[currentLessonIndex]?.id;
     if (!lessonId) return;
 
-    fetch(`/api/v1/learning/questions/${moduleData.id}/${lessonId}`)
+    fetch(apiUrl(`/learning/questions/${moduleData.id}/${lessonId}`))
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data && data.questions) {
@@ -190,26 +206,43 @@ export default function LessonView() {
       });
   }, [moduleData, currentLessonIndex, viewState]);
 
-  if (!moduleData) {
-    return (
-      <div className="p-8 text-center max-w-lg mx-auto mt-12 bg-white rounded-organic shadow-natural">
-        <h2 className="text-xl font-bold mb-4">{isSwahili ? 'Somo halijapatikana' : 'Module not found'}</h2>
-        <button onClick={() => navigate('/learn')} className="px-6 py-2.5 bg-forest-green text-white font-bold rounded-full">
-          {isSwahili ? 'Rudi kujifunza' : 'Return to Learn'}
-        </button>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!moduleData) return;
+    const lesson = moduleData.content[currentLessonIndex];
+    const media = lesson ? getLessonMedia(moduleData.id, lesson.id) : null;
+    if (activeTab === 'transcript' && !media) setActiveTab('content');
+  }, [activeTab, moduleData, currentLessonIndex]);
+
+  useEffect(() => {
+    if (!user || !moduleId) return;
+    let active = true;
+    const loadAttempts = async () => {
+      const token = sessionStorage.getItem('climate_justice_token')
+        || localStorage.getItem('climate_justice_token')
+        || localStorage.getItem('auth_token');
+      if (!token) return;
+      try {
+        const response = await fetch(apiUrl('/assessments/my-results'), {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error(`Could not load quiz attempts (${response.status})`);
+        const allAttempts = await response.json();
+        if (active) setQuizAttempts(allAttempts.filter((attempt: { moduleId: string }) => attempt.moduleId === moduleId));
+      } catch (error) {
+        console.error('Could not load saved quiz attempts', error);
+      }
+    };
+    void loadAttempts();
+    window.addEventListener('climate-justice-data-changed', loadAttempts);
+    return () => {
+      active = false;
+      window.removeEventListener('climate-justice-data-changed', loadAttempts);
+    };
+  }, [user, moduleId]);
 
   const currentLesson = moduleData.content[currentLessonIndex];
   const lessonMedia = currentLesson ? getLessonMedia(moduleData.id, currentLesson.id) : null;
   const activeLessonNotes = currentLesson ? generateComprehensiveStudyNotes(moduleData, currentLesson, lessonMedia) : '';
-
-  useEffect(() => {
-    if (activeTab === 'transcript' && !lessonMedia) {
-      setActiveTab('content');
-    }
-  }, [activeTab, lessonMedia]);
 
   const handleStartLessons = () => {
     const p = progress[moduleData.id];
@@ -228,12 +261,13 @@ export default function LessonView() {
   const handleNextLesson = async () => {
     stopSpeech();
     await updateLessonProgress(moduleData.id, currentLessonIndex);
+    await SyncService.syncNow();
 
     // Sync to backend if authenticated
     const token = sessionStorage.getItem('climate_justice_token') || localStorage.getItem('climate_justice_token') || localStorage.getItem('auth_token');
     if (token) {
       try {
-        await fetch('/api/v1/learning/progress', {
+        const response = await fetch(apiUrl('/learning/progress'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -245,8 +279,11 @@ export default function LessonView() {
             completed: true
           })
         });
+        if (!response.ok) throw new Error(`Could not save lesson progress (${response.status})`);
+        const savedProgress = await response.json();
+        if (savedProgress.certificate?.id) setCertificateId(savedProgress.certificate.id);
       } catch (e) {
-        // non-blocking
+        console.error('Could not save lesson progress to the server', e);
       }
     }
 
@@ -338,7 +375,7 @@ export default function LessonView() {
     }
 
     try {
-      const res = await fetch('/api/v1/learning/bookmarks', {
+      const res = await fetch(apiUrl('/learning/bookmarks'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -365,16 +402,33 @@ export default function LessonView() {
     setTimeout(() => setBookmarkFeedback(null), 3000);
   };
 
-  // Download Notes handler
-  const handleDownloadNotes = () => {
+  const handleDownloadModulePdf = async () => {
+    try {
+      setPdfDownloadError(null);
+      await downloadModulePdf(moduleData, language);
+    } catch (error) {
+      console.error('Could not generate the module PDF', error);
+      setPdfDownloadError(isSwahili
+        ? 'PDF haikuweza kutengenezwa. Tafadhali jaribu tena.'
+        : 'The PDF could not be generated. Please try again.');
+    }
+  };
+
+  const handleDownloadNotes = async () => {
     if (!activeLessonNotes || !currentLesson) return;
-    const element = document.createElement('a');
-    const file = new Blob([activeLessonNotes], { type: 'text/markdown;charset=utf-8' });
-    element.href = URL.createObjectURL(file);
-    element.download = `${moduleData.id}-${currentLesson.id}-study-notes.md`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+    try {
+      setPdfDownloadError(null);
+      await downloadStudyNotesPdf(
+        activeLessonNotes,
+        currentLesson.heading,
+        `${moduleData.id}-${currentLesson.id}-study-notes.pdf`
+      );
+    } catch (error) {
+      console.error('Could not generate the study-notes PDF', error);
+      setPdfDownloadError(isSwahili
+        ? 'PDF haikuweza kutengenezwa. Tafadhali jaribu tena.'
+        : 'The PDF could not be generated. Please try again.');
+    }
   };
 
   // Submit Q&A question
@@ -392,7 +446,7 @@ export default function LessonView() {
     setQuestionNotice(null);
 
     try {
-      const res = await fetch(`/api/v1/learning/questions/${moduleData.id}/${currentLesson.id}`, {
+      const res = await fetch(apiUrl(`/learning/questions/${moduleData.id}/${currentLesson.id}`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -418,10 +472,18 @@ export default function LessonView() {
     }
   };
 
-  const handleQuizComplete = async (score: number) => {
+  const handleQuizComplete = async (
+    score: number,
+    _total: number,
+    completion?: { passed?: boolean; pending?: boolean; clientEventId?: string; certificateId?: string }
+  ) => {
     setQuizScore(score);
+    setQuizPassed(completion?.passed ?? null);
+    setQuizPending(Boolean(completion?.pending));
+    setPendingQuizEventId(completion?.clientEventId || null);
+    setCertificateId(completion?.certificateId || null);
     setViewState('results');
-    await completeModule(moduleData.id);
+    if (completion?.passed) await completeModule(moduleData.id);
     
     const achMap: Record<string, string> = {
       m1: 'FIRST_STEP',
@@ -433,10 +495,60 @@ export default function LessonView() {
       m7: 'COMMUNITY_VOICE'
     };
     
-    if (achMap[moduleData.id]) {
+    if (completion?.passed && achMap[moduleData.id]) {
       await unlockAchievement(achMap[moduleData.id]);
     }
   };
+
+  useEffect(() => {
+    if (!pendingQuizEventId || !user) return;
+    const handleSync = async (event: Event) => {
+      const eventIds = (event as CustomEvent<{ clientEventIds?: string[] }>).detail?.clientEventIds;
+      if (!eventIds?.includes(pendingQuizEventId)) return;
+      const token = sessionStorage.getItem('climate_justice_token')
+        || localStorage.getItem('climate_justice_token')
+        || localStorage.getItem('auth_token');
+      if (!token) return;
+      try {
+        const [resultsResponse, certificateResponse] = await Promise.all([
+          fetch(apiUrl('/assessments/my-results'), { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(apiUrl('/certificates/my-certificates'), { headers: { Authorization: `Bearer ${token}` } })
+        ]);
+        if (!resultsResponse.ok || !certificateResponse.ok) {
+          throw new Error('Could not reload the saved course result after syncing');
+        }
+        const [results, certificates] = await Promise.all([
+          resultsResponse.json(),
+          certificateResponse.json()
+        ]);
+        const result = results.find((item: { clientEventId?: string }) => item.clientEventId === pendingQuizEventId);
+        if (!result) return;
+        setQuizScore(result.score);
+        setQuizPassed(result.passed);
+        setQuizPending(false);
+        if (result.passed && moduleData) {
+          await completeModule(moduleData.id);
+          const cert = certificates.find((item: { pathwayId?: string }) => item.pathwayId === 'nairobi-climate-justice');
+          if (cert) setCertificateId(cert.id);
+        }
+      } catch (error) {
+        console.error('Could not refresh the server-confirmed quiz result', error);
+      }
+    };
+    window.addEventListener('climate-justice-sync-complete', handleSync);
+    return () => window.removeEventListener('climate-justice-sync-complete', handleSync);
+  }, [pendingQuizEventId, user, moduleData, completeModule]);
+
+  if (!foundModuleData) {
+    return (
+      <div className="p-8 text-center max-w-lg mx-auto mt-12 bg-white rounded-organic shadow-natural">
+        <h2 className="text-xl font-bold mb-4">{isSwahili ? 'Somo halijapatikana' : 'Module not found'}</h2>
+        <button onClick={() => navigate('/learn')} className="px-6 py-2.5 bg-forest-green text-white font-bold rounded-full">
+          {isSwahili ? 'Rudi kujifunza' : 'Return to Learn'}
+        </button>
+      </div>
+    );
+  }
 
   const filteredTranscripts = (lessonMedia?.transcript || []).filter(t => 
     !transcriptSearch || 
@@ -444,13 +556,36 @@ export default function LessonView() {
     t.speaker.toLowerCase().includes(transcriptSearch.toLowerCase())
   );
 
+  const handleDownloadCertificate = async () => {
+    if (!certificateId) return;
+    const token = sessionStorage.getItem('climate_justice_token')
+      || localStorage.getItem('climate_justice_token')
+      || localStorage.getItem('auth_token');
+    if (!token) return;
+    try {
+      const response = await fetch(apiUrl(`/certificates/${certificateId}/pdf`), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error(`Certificate download failed (${response.status})`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `${certificateId}.pdf`;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error('Could not download the certificate', error);
+    }
+  };
+
   return (
     <div className="min-h-full pb-24 bg-gray-50">
       {/* Help Modal */}
       {showHelpModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl relative">
-            <button 
+            <button
               onClick={() => setShowHelpModal(false)}
               className="absolute top-5 right-5 text-gray-400 hover:text-gray-700 p-1 rounded-full hover:bg-gray-100"
               aria-label="Close Help"
@@ -592,15 +727,28 @@ export default function LessonView() {
                 </ul>
               </div>
 
-              <button 
-                onClick={handleStartLessons}
-                className="w-full bg-forest-green text-white py-4 rounded-full font-bold text-lg hover:bg-forest-green/90 flex items-center justify-center gap-2 shadow-natural transition"
-              >
-                <Play className="w-5 h-5 fill-current" />
-                {progress[moduleData.id]?.completedLessons?.length 
-                  ? (isSwahili ? 'Endelea Kujifunza' : 'Continue Learning') 
-                  : (isSwahili ? 'Anza Somo la Kwanza' : 'Start First Lesson')}
-              </button>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                <button
+                  onClick={handleStartLessons}
+                  className="w-full bg-forest-green text-white py-4 rounded-full font-bold text-lg hover:bg-forest-green/90 flex items-center justify-center gap-2 shadow-natural transition"
+                >
+                  <Play className="w-5 h-5 fill-current" />
+                  {progress[moduleData.id]?.completedLessons?.length
+                    ? (isSwahili ? 'Endelea Kujifunza' : 'Continue Learning')
+                    : (isSwahili ? 'Anza Somo la Kwanza' : 'Start First Lesson')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadModulePdf()}
+                  className="px-6 py-3 rounded-full border border-forest-green text-forest-green font-bold hover:bg-emerald-50 transition flex items-center justify-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  {isSwahili ? 'Pakua PDF ya Moduli' : 'Download Module PDF'}
+                </button>
+              </div>
+              {pdfDownloadError && (
+                <p role="alert" className="mt-3 text-sm text-red-700">{pdfDownloadError}</p>
+              )}
             </div>
           </motion.div>
         )}
@@ -811,12 +959,12 @@ export default function LessonView() {
                       setVideoIsPaused(true);
                       updateLessonProgress(moduleData.id, currentLessonIndex);
                     }}
-                    onError={() => setVideoError('Video stream unavailable. Retrying...')}
+                    onError={() => setVideoError('This video cannot be played in the current browser. Lesson text and transcript remain available.')}
                     controls={false}
                   />
 
                   {videoError && (
-                    <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center p-6 text-center text-white z-20">
+                    <div role="status" aria-live="polite" className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center p-6 text-center text-white z-20">
                       <AlertCircle className="w-8 h-8 text-rose-500 mb-2" />
                       <p className="text-xs font-semibold">{videoError}</p>
                       <button
@@ -966,7 +1114,7 @@ export default function LessonView() {
                       className="px-4 py-2 bg-white/15 hover:bg-white/25 text-white rounded-xl font-bold text-xs flex items-center gap-2 border border-white/20 transition"
                     >
                       <Download className="w-4 h-4" />
-                      <span>{isSwahili ? 'Pakua Nyaraka (.md)' : 'Download Study Notes'}</span>
+                      <span>{isSwahili ? 'Pakua Nyaraka za Masomo PDF' : 'Download Study Notes PDF'}</span>
                     </button>
                   </div>
                 </div>
@@ -1285,7 +1433,7 @@ export default function LessonView() {
                       className="px-4 py-2 bg-forest-green hover:bg-forest-green/90 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
                     >
                       <Download className="w-4 h-4" />
-                      <span>{isSwahili ? 'Pakua (.md)' : 'Download Markdown'}</span>
+                      <span>{isSwahili ? 'Pakua PDF' : 'Download PDF'}</span>
                     </button>
                     <button
                       onClick={() => window.print()}
@@ -1443,7 +1591,7 @@ export default function LessonView() {
         {/* QUIZ ACTIVE */}
         {viewState === 'quiz_active' && (
           <motion.div key="quiz_active" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-            <QuizEngine questions={moduleData.quiz} onComplete={handleQuizComplete} />
+            <QuizEngine moduleId={moduleData.id} questions={moduleData.quiz} onComplete={handleQuizComplete} />
           </motion.div>
         )}
 
@@ -1456,17 +1604,62 @@ export default function LessonView() {
             </div>
             
             <h2 className="text-2xl font-bold text-gray-900 mb-2">
-              {quizScore === moduleData.quiz.length 
-                ? (isSwahili ? 'Hongera Sana! Alama Kamili!' : 'Outstanding! Perfect Score!') 
-                : (isSwahili ? 'Moduli Imekamilika!' : 'Module Completed!')}
+              {quizPending
+                ? (isSwahili ? 'Jaribio Linasubiri Uthibitisho' : 'Quiz Pending Verification')
+                : quizPassed === false
+                  ? (isSwahili ? 'Jaribio Halijafaulu' : 'Quiz Not Passed')
+                  : (isSwahili ? 'Moduli Imekamilika!' : 'Module Completed!')}
             </h2>
             <p className="text-gray-600 mb-8">
-              {isSwahili 
-                ? 'Umekamilisha masomo na maswali ya moduli hii. Unaweza kuendelea au kurudia maswali.' 
-                : 'You have completed all substantive lessons and assessments for this topic.'}
+              {quizPending
+                ? 'This offline attempt is saved and waiting for server grading after reconnection.'
+                : quizPassed === false
+                  ? `You scored ${Math.round((quizScore / moduleData.quiz.length) * 100)}%. Pass mark: 70%. Retake the quiz to complete this module.`
+                  : isSwahili
+                    ? 'Umekamilisha masomo na maswali ya moduli hii. Unaweza kuendelea au kurudia maswali.'
+                    : 'You have completed all required lessons and passed this module assessment.'}
             </p>
 
+            <section className="mb-8 text-left rounded-2xl bg-gray-50 border border-gray-200 p-4">
+              <h3 className="font-bold text-sm text-gray-900 mb-2">Required lessons</h3>
+              <ul className="space-y-1.5">
+                {moduleData.content.map((lesson, index) => {
+                  const done = Boolean(progress[moduleData.id]?.completedLessons.includes(index));
+                  return (
+                    <li key={lesson.id} className="flex items-center gap-2 text-xs">
+                      <CheckCircle className={`w-4 h-4 ${done ? 'text-emerald-600' : 'text-gray-300'}`} />
+                      <span className={done ? 'text-gray-900' : 'text-gray-500'}>
+                        {lesson.heading}{done ? ' - completed' : ' - remaining'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {quizAttempts.length > 0 && (
+                <div className="mt-4 border-t border-gray-200 pt-3">
+                  <h3 className="font-bold text-sm text-gray-900 mb-2">Quiz attempts</h3>
+                  <ul className="space-y-1.5">
+                    {quizAttempts.map(attempt => (
+                      <li key={attempt.id} className={`text-xs ${attempt.passed ? 'text-emerald-700' : 'text-red-700'}`}>
+                        {new Date(attempt.createdAt).toLocaleString()} - {attempt.score}/{attempt.totalQuestions}
+                        ({attempt.totalQuestions ? Math.round((attempt.score / attempt.totalQuestions) * 100) : 0}%)
+                        {attempt.passed ? ' - passed' : ' - failed; retake required'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+
             <div className="space-y-3">
+              {certificateId && (
+                <button
+                  onClick={() => void handleDownloadCertificate()}
+                  className="w-full bg-amber-500 text-white py-3.5 rounded-full font-bold hover:bg-amber-600 transition shadow-natural"
+                >
+                  Download Certificate
+                </button>
+              )}
               <button 
                 onClick={() => navigate('/learn')}
                 className="w-full bg-forest-green text-white py-3.5 rounded-full font-bold hover:bg-forest-green/90 transition shadow-natural"

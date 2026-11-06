@@ -109,6 +109,7 @@ export async function validateSession(token: string): Promise<User | null> {
 export interface GooglePayload {
   sub: string;
   email?: string;
+  email_verified?: boolean;
   name?: string;
   picture?: string;
 }
@@ -125,15 +126,17 @@ export async function verifyGoogleToken(idToken: string): Promise<GooglePayload 
     return {
       sub,
       email: `${sub}@example.com`,
+      email_verified: true,
       name: `Google User ${sub}`,
       picture: 'https://lh3.googleusercontent.com/a/default-user'
     };
   }
 
-  if (idToken.startsWith('mock_google_id_token')) {
+  if (process.env.NODE_ENV === 'test' && idToken.startsWith('mock_google_id_token')) {
     return {
       sub: 'google-oauth2|1092837465928',
       email: 'amina.google@nairobi.org',
+      email_verified: true,
       name: 'Amina Google',
       picture: 'https://lh3.googleusercontent.com/a/mock'
     };
@@ -158,6 +161,7 @@ export async function verifyGoogleToken(idToken: string): Promise<GooglePayload 
     return {
       sub: payload.sub,
       email: payload.email,
+      email_verified: payload.email_verified,
       name: payload.name,
       picture: payload.picture
     };

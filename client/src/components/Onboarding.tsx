@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
+import { apiUrl } from '../lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Onboarding() {
@@ -19,7 +20,7 @@ export default function Onboarding() {
   const handleComplete = async () => {
     try {
       // Register with backend
-      const res = await fetch('/api/v1/auth/register', {
+      const res = await fetch(apiUrl('/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 

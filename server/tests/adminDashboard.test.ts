@@ -94,7 +94,7 @@ describe('Admin Dashboard API Endpoints', () => {
 
       // Verify database metadata
       expect(res.body.database.dialect).toBe('sqlite');
-      expect(res.body.database.storage).toBe('server/database.sqlite');
+      expect(res.body.database.storage).toBe(':memory:');
       expect(res.body.database.connected).toBe(true);
 
       // Verify real records are returned
@@ -151,6 +151,14 @@ describe('Admin Dashboard API Endpoints', () => {
   });
 
   describe('GET /api/v1/admin/export with session token', () => {
+    it('rejects a learner session', async () => {
+      const res = await request(app)
+        .get('/api/v1/admin/export')
+        .set('Authorization', `Bearer ${learnerToken}`);
+
+      expect(res.status).toBe(403);
+    });
+
     it('allows admin with session token to access research export', async () => {
       const res = await request(app)
         .get('/api/v1/admin/export')
@@ -158,6 +166,9 @@ describe('Admin Dashboard API Endpoints', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.exportedAt).toBeDefined();
+      expect(Array.isArray(res.body.participants)).toBe(true);
+      expect(Array.isArray(res.body.progress)).toBe(true);
+      expect(Array.isArray(res.body.assessments)).toBe(true);
     });
   });
 });

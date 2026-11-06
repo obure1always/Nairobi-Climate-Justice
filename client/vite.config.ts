@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'images/*.jpg'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'images/*.jpg', 'fonts/*.ttf', 'fonts/OFL.txt'],
       manifest: {
         name: 'Climate Justice Nairobi',
         short_name: 'ClimateNrb',

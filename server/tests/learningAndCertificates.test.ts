@@ -1,16 +1,22 @@
 import request from 'supertest';
+import { writeFile } from 'node:fs/promises';
 import app, { startServer } from '../src/index';
 import { 
   setupDb, 
   User, 
   UserSession, 
-  ModuleProgress, 
   LessonProgress,
+  QuizSubmission,
   Certificate,
+  CertificateDelivery,
+  SyncRecord,
   ProjectSubmission,
   ImpactAction 
 } from '../src/models/index';
-import { createSession } from '../src/services/authService';
+import { createSession, hashPassword } from '../src/services/authService';
+import { COURSE_MODULES } from '../src/services/courseCatalog';
+import { attemptCertificateEmail } from '../src/services/certificateEmail';
+import { PDFDocument } from 'pdf-lib';
 
 describe('Core Learning Experience & Institutional API Endpoints', () => {
   let learnerToken: string;
@@ -25,6 +31,8 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
     const learner = await User.create({
       phone: '+254712345678',
       phoneVerified: true,
+      email: 'amina@example.test',
+      emailVerified: true,
       name: 'Amina Wanjiku',
       role: 'learner',
       authProvider: 'phone'
@@ -156,22 +164,62 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
   });
 
   describe('Interactive Quiz Submission & Integrity', () => {
-    it('records quiz submission and validates passing threshold of 70%', async () => {
+    it('grades actual answers on the server and returns the original attempt on retry', async () => {
+      const clientEventId = 'test-course-m1-attempt';
+      const answers = Object.fromEntries(COURSE_MODULES[0].questions.map(question => [question.id, 1]));
+      const failedAttempt = await request(app)
+        .post('/api/v1/assessments/submit')
+        .set('Authorization', `Bearer ${learnerToken}`)
+        .send({
+          moduleId: 'm1',
+          clientEventId: 'test-course-m1-failed',
+          score: 8,
+          totalQuestions: 8,
+          answers: Object.fromEntries(COURSE_MODULES[0].questions.map(question => [question.id, 0]))
+        });
+      expect(failedAttempt.status).toBe(201);
+      expect(failedAttempt.body.score).toBe(0);
+      expect(failedAttempt.body.passed).toBe(false);
+
       const passRes = await request(app)
         .post('/api/v1/assessments/submit')
         .set('Authorization', `Bearer ${learnerToken}`)
         .send({
           moduleId: 'm1',
-          pathwayId: 'path-science',
-          score: 4,
-          totalQuestions: 5,
-          answers: { q1: 1, q2: 0, q3: 2, q4: 3, q5: 1 },
-          feedback: ['Correct explanation for Q1']
+          clientEventId,
+          score: 0,
+          totalQuestions: 1,
+          answers
         });
 
       expect(passRes.status).toBe(201);
       expect(passRes.body.passed).toBe(true);
-      expect(passRes.body.percentage).toBe(80);
+      expect(passRes.body.percentage).toBe(100);
+      expect(passRes.body.score).toBe(COURSE_MODULES[0].questions.length);
+
+      const retry = await request(app)
+        .post('/api/v1/assessments/submit')
+        .set('Authorization', `Bearer ${learnerToken}`)
+        .send({ moduleId: 'm1', clientEventId, answers });
+      expect(retry.body.duplicate).toBe(true);
+      expect(retry.body.submissionId).toBe(passRes.body.submissionId);
+
+      const offlineRetry = await request(app)
+        .post('/api/v1/sync')
+        .set('Authorization', `Bearer ${learnerToken}`)
+        .send({
+          records: [{
+            clientEventId,
+            ownerId: learnerId,
+            entityType: 'QUIZ_ATTEMPT',
+            entityData: { moduleId: 'm1', answers }
+          }]
+        });
+
+      expect(offlineRetry.status).toBe(200);
+      expect(offlineRetry.body.processedIds).toEqual([clientEventId]);
+      expect(offlineRetry.body.failedIds).toEqual([]);
+      expect(await QuizSubmission.count({ where: { userId: learnerId, clientEventId } })).toBe(1);
     });
   });
 
@@ -214,19 +262,45 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
   describe('Verifiable Digital Certificates Lifecycle', () => {
     let issuedCertId: string;
 
+    it('does not issue a course certificate before all requirements are met', async () => {
+      const response = await request(app)
+        .post('/api/v1/certificates/issue')
+        .set('Authorization', `Bearer ${learnerToken}`)
+        .send({});
+      expect(response.status).toBe(409);
+      expect(response.body.success).toBe(false);
+    });
+
     it('issues digital certificate upon fulfilling requirements and prevents duplicates', async () => {
-      // Ensure module progress exists
-      await ModuleProgress.findOrCreate({
-        where: { userId: learnerId, moduleId: 'm1' },
-        defaults: {
-          userId: learnerId,
-          participantId: `USER-${learnerId.substring(0, 8)}`,
-          moduleId: 'm1',
-          completedLessons: 4,
-          completed: true,
-          lastAccessed: new Date()
+      for (const courseModule of COURSE_MODULES) {
+        for (const lessonId of courseModule.lessons) {
+          await LessonProgress.findOrCreate({
+            where: { userId: learnerId, moduleId: courseModule.id, lessonId },
+            defaults: {
+              userId: learnerId,
+              moduleId: courseModule.id,
+              lessonId,
+              completed: true,
+              playbackSeconds: 0,
+              notes: null,
+              lastAccessedAt: new Date()
+            }
+          });
         }
-      });
+        await QuizSubmission.findOrCreate({
+          where: { userId: learnerId, clientEventId: `certificate-${courseModule.id}` },
+          defaults: {
+            userId: learnerId,
+            moduleId: courseModule.id,
+            clientEventId: `certificate-${courseModule.id}`,
+            pathwayId: 'nairobi-climate-justice',
+            score: courseModule.questions.length,
+            totalQuestions: courseModule.questions.length,
+            passed: true,
+            answers: {}
+          }
+        });
+      }
 
       const issueRes = await request(app)
         .post('/api/v1/certificates/issue')
@@ -239,7 +313,8 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
 
       expect(issueRes.status).toBe(200);
       expect(issueRes.body.success).toBe(true);
-      expect(issueRes.body.certificate.id).toMatch(/^CJN-2026-[A-F0-9]+$/);
+      expect(issueRes.body.certificate.id).toMatch(/^CJN-\d{4}-[A-F0-9]+$/);
+      expect(issueRes.body.emailDeliveryStatus).toBe('failed');
       issuedCertId = issueRes.body.certificate.id;
 
       // Duplicate issuance returns existing certificate idempotently
@@ -253,6 +328,8 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
 
       expect(dupRes.status).toBe(200);
       expect(dupRes.body.certificate.id).toBe(issuedCertId);
+      const delivery = await CertificateDelivery.findByPk(issuedCertId);
+      expect(delivery?.attemptCount).toBe(1);
     });
 
     it('publicly verifies certificate without authentication', async () => {
@@ -265,12 +342,197 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
       expect(verifyRes.body.issuingOrganization).toContain('Climate Justice Nairobi');
     });
 
+    it('downloads a PDF whose certificate identifier matches the saved certificate', async () => {
+      const pdfRes = await request(app)
+        .get(`/api/v1/certificates/${issuedCertId}/pdf`)
+        .set('Authorization', `Bearer ${learnerToken}`)
+        .expect(200)
+        .expect('Content-Type', /application\/pdf/);
+      const bytes = Buffer.from(pdfRes.body);
+      const pdf = await PDFDocument.load(bytes);
+      expect(pdf.getPageCount()).toBe(1);
+      expect(pdf.getPage(0).getWidth()).toBeCloseTo(841.89, 1);
+      expect(pdf.getPage(0).getHeight()).toBeCloseTo(595.28, 1);
+      if (process.env.CERTIFICATE_TEST_PDF_OUTPUT) {
+        await writeFile(process.env.CERTIFICATE_TEST_PDF_OUTPUT, bytes);
+      }
+    });
+
+    it('retries failed email with the exact downloadable PDF and keeps the existing certificate', async () => {
+      const dashboardRes = await request(app)
+        .get('/api/v1/certificates/my-certificates')
+        .set('Authorization', 'Bearer ' + learnerToken)
+      expect(dashboardRes.status).toBe(200);
+      const dashboardCertificate = dashboardRes.body.find((item: any) => item.id === issuedCertId);
+      expect(dashboardCertificate.emailDeliveryStatus).toBe('failed');
+
+      const pdfRes = await request(app)
+        .get(`/api/v1/certificates/${issuedCertId}/pdf`)
+        .set('Authorization', 'Bearer ' + learnerToken)
+        .expect(200)
+        .expect('Content-Type', /application\/pdf/);
+      const downloadedPdf = Buffer.from(pdfRes.body);
+      const originalCertificate = await Certificate.findByPk(issuedCertId);
+      const originalIssueDate = originalCertificate?.issueDate.getTime();
+      let emailedPdf: Buffer | undefined;
+
+      const delivery = await attemptCertificateEmail(
+        issuedCertId,
+        async (recipient, certificate, pdfBytes) => {
+          expect(recipient).toBe('amina@example.test');
+          expect(certificate.id).toBe(issuedCertId);
+          emailedPdf = pdfBytes;
+        },
+        true
+      );
+      expect(delivery?.status).toBe('sent');
+      expect(emailedPdf?.equals(downloadedPdf)).toBe(true);
+
+      const duplicateIssue = await request(app)
+        .post('/api/v1/certificates/issue')
+        .set('Authorization', 'Bearer ' + learnerToken)
+        .send({});
+      expect(duplicateIssue.body.certificate.id).toBe(issuedCertId);
+      expect(duplicateIssue.body.emailDeliveryStatus).toBe('sent');
+
+      const savedCertificate = await Certificate.findByPk(issuedCertId);
+      const savedDelivery = await CertificateDelivery.findByPk(issuedCertId);
+      expect(savedCertificate?.issueDate.getTime()).toBe(originalIssueDate);
+      expect(savedDelivery?.attemptCount).toBe(2);
+      expect(savedDelivery?.status).toBe('sent');
+    });
+
     it('returns 404 for nonexistent certificate verification', async () => {
       const verifyRes = await request(app)
         .get('/api/v1/certificates/verify/CJN-FAKE-999');
 
       expect(verifyRes.status).toBe(404);
       expect(verifyRes.body.verified).toBe(false);
+    });
+  });
+
+  describe('Offline completion synchronization', () => {
+    it('issues and emails once when final lesson progress syncs after the final quiz', async () => {
+      const { hash, salt } = hashPassword('OfflineSyncPass123!');
+      const learner = await User.create({
+        email: 'offline-learner@example.test',
+        emailVerified: true,
+        name: 'Musa Otieno',
+        passwordHash: hash,
+        passwordSalt: salt,
+        role: 'learner',
+        authProvider: 'email'
+      });
+      const login = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: 'offline-learner@example.test', password: 'OfflineSyncPass123!' });
+      expect(login.status).toBe(200);
+      expect(login.body.user.emailVerified).toBe(true);
+      const token = login.body.token;
+
+      const incomplete = await request(app)
+        .post('/api/v1/certificates/issue')
+        .set('Authorization', 'Bearer ' + token)
+        .send({});
+      expect(incomplete.status).toBe(409);
+
+      const quizRecords = COURSE_MODULES.map((courseModule, index) => ({
+        clientEventId: `offline-quiz-${index}`,
+        ownerId: learner.id,
+        entityType: 'QUIZ_ATTEMPT',
+        entityData: {
+          moduleId: courseModule.id,
+          answers: Object.fromEntries(courseModule.questions.map(question => [
+            question.id,
+            question.correctAnswer
+          ]))
+        }
+      }));
+      const progressRecords = COURSE_MODULES.map((courseModule, index) => ({
+        clientEventId: `offline-progress-${index}`,
+        ownerId: learner.id,
+        entityType: 'PROGRESS',
+        entityData: {
+          moduleId: courseModule.id,
+          completedLessons: courseModule.lessons.map((_lessonId, lessonIndex) => lessonIndex)
+        }
+      }));
+
+      const quizSync = await request(app)
+        .post('/api/v1/sync')
+        .set('Authorization', 'Bearer ' + token)
+        .send({ records: quizRecords });
+      expect(quizSync.status).toBe(200);
+      expect(quizSync.body.processedIds).toHaveLength(COURSE_MODULES.length);
+      expect(await Certificate.count({ where: { userId: learner.id } })).toBe(0);
+
+      await LessonProgress.create({
+        userId: learner.id,
+        moduleId: COURSE_MODULES[0].id,
+        lessonId: COURSE_MODULES[0].lessons[0],
+        completed: false,
+        playbackSeconds: 30,
+        notes: null,
+        lastAccessedAt: new Date()
+      });
+
+      const progressSync = await request(app)
+        .post('/api/v1/sync')
+        .set('Authorization', 'Bearer ' + token)
+        .send({ records: progressRecords });
+      expect(progressSync.status).toBe(200);
+      expect(progressSync.body.processedIds).toHaveLength(COURSE_MODULES.length);
+      expect(progressSync.body.failedIds).toHaveLength(0);
+      expect((await LessonProgress.findOne({
+        where: {
+          userId: learner.id,
+          moduleId: COURSE_MODULES[0].id,
+          lessonId: COURSE_MODULES[0].lessons[0]
+        }
+      }))?.completed).toBe(true);
+
+      const certificate = await Certificate.findOne({
+        where: { userId: learner.id, pathwayId: 'nairobi-climate-justice' }
+      });
+      expect(certificate).not.toBeNull();
+      expect(certificate?.learnerName).toBe('Musa Otieno');
+      const delivery = await CertificateDelivery.findByPk(certificate!.id);
+      expect(delivery?.status).toBe('failed');
+      expect(delivery?.attemptCount).toBe(1);
+
+      const repeatedProgress = await request(app)
+        .post('/api/v1/sync')
+        .set('Authorization', 'Bearer ' + token)
+        .send({
+          records: [{
+            ...progressRecords[progressRecords.length - 1],
+            clientEventId: 'offline-progress-repeat',
+            createdAt: new Date().toISOString()
+          }]
+        });
+      expect(repeatedProgress.status).toBe(200);
+      expect(await Certificate.count({ where: { userId: learner.id } })).toBe(1);
+      expect((await CertificateDelivery.findByPk(certificate!.id))?.attemptCount).toBe(1);
+      expect(await SyncRecord.count({ where: { userId: learner.id } })).toBe(COURSE_MODULES.length * 2 + 1);
+
+      const dashboard = await request(app)
+        .get('/api/v1/certificates/my-certificates')
+        .set('Authorization', 'Bearer ' + token)
+      expect(dashboard.status).toBe(200);
+      expect(dashboard.body[0].emailDeliveryStatus).toBe('failed');
+
+      const pdfResponse = await request(app)
+        .get(`/api/v1/certificates/${certificate!.id}/pdf`)
+        .set('Authorization', 'Bearer ' + token)
+        .expect(200)
+        .expect('Content-Type', /application\/pdf/);
+      const pdf = await PDFDocument.load(Buffer.from(pdfResponse.body));
+      expect(pdf.getPageCount()).toBe(1);
+
+      const verification = await request(app)
+        .get(`/api/v1/certificates/verify/${certificate!.id}`);
+      expect(verification.status).toBe(200);
+      expect(verification.body.verified).toBe(true);
     });
   });
 
