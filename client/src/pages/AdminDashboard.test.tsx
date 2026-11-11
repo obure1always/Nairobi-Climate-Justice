@@ -115,13 +115,33 @@ describe('AdminDashboard Component', () => {
     vi.clearAllMocks();
     sessionStorage.setItem('climate_justice_token', 'mock_admin_token');
 
-    const mockFetch = vi.fn().mockImplementation((url: string) => {
+    const inquiry = {
+      id: 'CJN-TICK-TEST',
+      userId: mockLearnerUser.id,
+      name: mockLearnerUser.name,
+      email: mockLearnerUser.email,
+      category: 'certificates',
+      subject: 'Certificate help',
+      message: 'Where can I get my certificate?',
+      status: 'open',
+      reply: null,
+      createdAt: '2026-11-10T08:00:00Z'
+    };
+    const mockFetch = vi.fn().mockImplementation((url: string, options?: RequestInit) => {
       if (typeof url === 'string' && url.includes('/api/v1/admin/dashboard')) {
         return Promise.resolve({
           ok: true,
           status: 200,
           json: () => Promise.resolve(mockDashboardData)
         });
+      }
+      if (url.includes('/admin/support/tickets?')) {
+        return Promise.resolve(Response.json({ tickets: [inquiry], hasMore: false }));
+      }
+      if (url.endsWith('/admin/support/tickets/CJN-TICK-TEST/reply')) {
+        return Promise.resolve(Response.json({
+          ticket: { ...inquiry, status: 'resolved', reply: JSON.parse(String(options?.body)).reply }
+        }));
       }
       return Promise.resolve({
         ok: true,
@@ -228,5 +248,18 @@ describe('AdminDashboard Component', () => {
     const activityTab = screen.getByRole('button', { name: /Live Activity Feed/i });
     fireEvent.click(activityTab);
     expect(screen.getByText('New Account Registered')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Support Inbox' }));
+    const replyButton = await screen.findByRole('button', { name: 'Reply to inquiry Certificate help' });
+    fireEvent.click(replyButton);
+    const reply = 'Select Download Certificate on your dashboard.';
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reply to Amina Learner' }), { target: { value: reply } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send reply' }));
+    expect(await screen.findByText(reply)).toBeDefined();
+    expect(screen.getByText('Replied')).toBeDefined();
+    expect(fetch).toHaveBeenCalledWith('/api/v1/admin/support/tickets/CJN-TICK-TEST/reply', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ reply })
+    }));
   });
 });

@@ -599,22 +599,53 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
       expect(res.body.user.avatarUrl).toContain('unsplash.com');
     });
 
-    it('submits a support ticket via POST /api/v1/support/tickets', async () => {
-      const res = await request(app)
-        .post('/api/v1/support/tickets')
-        .set('Authorization', `Bearer ${learnerToken}`)
-        .send({
-          name: 'Amina Wanjiku',
-          email: 'learner@climatejustice.ke',
-          category: 'certificates',
-          subject: 'Question regarding certificate verification QR',
-          message: 'How can our municipal committee verify our certificate hash on mobile devices without an active internet connection?'
-        });
+    it('lets the admin reply to a signed-in learner and keeps the reply private to that account', async () => {
+      const admin = await User.create({ name: 'Support Admin', role: 'admin', authProvider: 'email', email: 'support-admin@example.test' });
+      const adminAuth = 'Bearer ' + await createSession(admin.id);
+      const learnerAuth = 'Bearer ' + learnerToken;
+      const otherAuth = 'Bearer ' + instructorToken;
+      const inquiry = {
+        name: 'Amina Wanjiku',
+        category: 'certificates',
+        subject: 'Certificate download',
+        message: 'Where can I download my earned certificate?'
+      };
 
-      expect(res.status).toBe(201);
-      expect(res.body.success).toBe(true);
-      expect(res.body.ticketId).toMatch(/^CJN-TICK-/);
-      expect(res.body.message).toContain('logged with reference');
+      await request(app)
+        .post('/api/v1/support/tickets')
+        .set('Authorization', 'Bearer expired-session')
+        .send(inquiry)
+        .expect(401);
+      const submission = await request(app)
+        .post('/api/v1/support/tickets')
+        .set('Authorization', learnerAuth)
+        .send(inquiry)
+        .expect(201);
+      const { ticketId } = submission.body;
+      expect(ticketId).toMatch(/^CJN-TICK-/);
+      expect(submission.body.message).toContain('My Support Inquiries');
+
+      const inboxPath = '/api/v1/admin/support/tickets';
+      const replyPath = inboxPath + '/' + ticketId + '/reply';
+      const reply = 'Open your dashboard and choose Download Certificate.';
+      await request(app).get(inboxPath).expect(401);
+      await request(app).get(inboxPath).set('Authorization', learnerAuth).expect(403);
+      await request(app).patch(replyPath).set('Authorization', learnerAuth).send({ reply }).expect(403);
+      await request(app).patch(replyPath).set('Authorization', adminAuth).send({ reply: ' ' }).expect(400);
+      const inbox = await request(app).get(inboxPath).set('Authorization', adminAuth).expect(200);
+      expect(inbox.body.tickets).toEqual([expect.objectContaining({ id: ticketId, status: 'open', userId: learnerId })]);
+
+      const saved = await request(app).patch(replyPath).set('Authorization', adminAuth).send({ reply }).expect(200);
+      expect(saved.body.ticket).toMatchObject({ id: ticketId, reply, status: 'resolved' });
+      expect(saved.body.ticket.repliedAt).toBeTruthy();
+      const retry = await request(app).patch(replyPath).set('Authorization', adminAuth).send({ reply }).expect(200);
+      expect(retry.body.ticket.repliedAt).toBe(saved.body.ticket.repliedAt);
+      await request(app).patch(replyPath).set('Authorization', adminAuth).send({ reply: 'Second reply' }).expect(409);
+
+      const learnerTickets = await request(app).get('/api/v1/support/tickets').set('Authorization', learnerAuth).expect(200);
+      expect(learnerTickets.body.tickets).toEqual([expect.objectContaining({ id: ticketId, reply, status: 'resolved' })]);
+      const otherTickets = await request(app).get('/api/v1/support/tickets').set('Authorization', otherAuth).expect(200);
+      expect(otherTickets.body.tickets).toEqual([]);
     });
   });
 });

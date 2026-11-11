@@ -1777,78 +1777,121 @@ app.post('/api/v1/assistant/report-error', requireUserAuth, async (req: Authenti
 });
 
 // 12. Support & Help Center Inquiries
-app.post(['/api/v1/support/tickets', '/api/v1/support/inquiries'], async (req: Request, res: Response) => {
-  try {
-    const { name, email, category, subject, message } = req.body;
+app.post(
+  ['/api/v1/support/tickets', '/api/v1/support/inquiries'],
+  (req: AuthenticatedRequest, res: Response, next: NextFunction) =>
+    req.headers.authorization === undefined ? next() : requireUserAuth(req, res, next),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { name, email, category, subject, message } = req.body ?? {};
+      const contactEmail = typeof email === 'string' && email.trim()
+        ? email.trim().toLowerCase()
+        : req.user?.email || '';
 
-    if (!name || typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({ error: 'Name is required' });
-    }
-    if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      return res.status(400).json({ error: 'A valid email address is required' });
-    }
-    if (!subject || typeof subject !== 'string' || !subject.trim()) {
-      return res.status(400).json({ error: 'Subject is required' });
-    }
-    if (!message || typeof message !== 'string' || message.trim().length < 10) {
-      return res.status(400).json({ error: 'Message must be at least 10 characters long' });
-    }
-
-    let userId: string | null = null;
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7).trim();
-      const user = await validateSession(token);
-      if (user) {
-        userId = user.id;
+      if (typeof name !== 'string' || !name.trim() || name.trim().length > 255) {
+        return res.status(400).json({ error: 'Enter a name of up to 255 characters.' });
       }
+      if ((!req.user || contactEmail) &&
+        (contactEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))) {
+        return res.status(400).json({ error: 'Enter a valid contact email.' });
+      }
+      if (typeof subject !== 'string' || !subject.trim() || subject.trim().length > 255) {
+        return res.status(400).json({ error: 'Enter a subject of up to 255 characters.' });
+      }
+      if (typeof message !== 'string' || message.trim().length < 10 || message.trim().length > 4000) {
+        return res.status(400).json({ error: 'Message must be between 10 and 4,000 characters.' });
+      }
+
+      const ticketId = `CJN-TICK-${Math.random().toString(36).substring(2, 7).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+
+      const ticket = await SupportTicket.create({
+        id: ticketId,
+        userId: req.user?.id ?? null,
+        name: name.trim(),
+        email: contactEmail,
+        category: typeof category === 'string' ? category.trim().slice(0, 64) || 'general' : 'general',
+        subject: subject.trim(),
+        message: message.trim(),
+        status: 'open'
+      });
+
+      return res.status(201).json({
+        success: true,
+        ticketId: ticket.id,
+        message: req.user
+          ? 'Your inquiry has been logged. You can read the reply under My Support Inquiries.'
+          : 'Your inquiry has been logged. The support team can use your contact email to reply.'
+      });
+    } catch (error) {
+      console.error('[support] submit_failed', error instanceof Error ? error.name : 'Unknown error');
+      return res.status(500).json({ error: 'Could not save the inquiry.' });
     }
-
-    const ticketId = `CJN-TICK-${Math.random().toString(36).substring(2, 7).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
-
-    const ticket = await SupportTicket.create({
-      id: ticketId,
-      userId,
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      category: category?.trim() || 'general',
-      subject: subject.trim(),
-      message: message.trim(),
-      status: 'open'
-    });
-
-    return res.status(201).json({
-      success: true,
-      ticketId: ticket.id,
-      message: `Your inquiry has been logged with reference ${ticket.id}. Our academic and technical support team will reply to ${ticket.email}.`
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
   }
-});
+);
 
-app.get('/api/v1/support/tickets', async (req: Request, res: Response) => {
+app.get('/api/v1/support/tickets', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized: Authentication required' });
-    }
-    const token = authHeader.substring(7).trim();
-    const user = await validateSession(token);
-    if (!user) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid session' });
-    }
-
-    const where = user.role === 'admin' || user.role === 'instructor' ? {} : { userId: user.id };
     const tickets = await SupportTicket.findAll({
-      where,
-      order: [['createdAt', 'DESC']],
+      where: { userId: req.user!.id },
+      attributes: ['id', 'category', 'subject', 'message', 'status', 'reply', 'repliedAt', 'createdAt'],
+      order: [['createdAt', 'DESC'], ['id', 'DESC']],
       limit: 50
     });
 
+    res.setHeader('Cache-Control', 'private, no-store');
     return res.json({ success: true, tickets });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('[support] list_failed', error instanceof Error ? error.name : 'Unknown error');
+    return res.status(500).json({ error: 'Could not load your inquiries.' });
+  }
+});
+
+app.get('/api/v1/admin/support/tickets', requireRoles(['admin']), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pageSize = 25;
+    const page = Number(req.query.page ?? 1);
+    if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(page * pageSize)) {
+      return res.status(400).json({ error: 'Invalid inbox page.' });
+    }
+    const { rows: tickets, count } = await SupportTicket.findAndCountAll({
+      order: [['createdAt', 'DESC'], ['id', 'DESC']],
+      limit: pageSize,
+      offset: (page - 1) * pageSize
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.json({ tickets, hasMore: page * pageSize < count });
+  } catch (error) {
+    console.error('[support] admin_list_failed', error instanceof Error ? error.name : 'Unknown error');
+    return res.status(500).json({ error: 'Could not load the support inbox.' });
+  }
+});
+
+app.patch('/api/v1/admin/support/tickets/:id/reply', requireRoles(['admin']), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const reply = typeof req.body?.reply === 'string' ? req.body.reply.trim() : '';
+    if (!reply || reply.length > 4000) {
+      return res.status(400).json({ error: 'Enter a reply of up to 4,000 characters.' });
+    }
+
+    const ticket = await SupportTicket.findByPk(req.params.id);
+    if (!ticket) return res.status(404).json({ error: 'Inquiry not found.' });
+    if (!ticket.userId) {
+      return res.status(409).json({ error: 'Use the contact email to respond to a guest inquiry.' });
+    }
+
+    const [updated] = await SupportTicket.update(
+      { reply, repliedAt: new Date(), status: 'resolved' },
+      { where: { id: ticket.id, reply: null } }
+    );
+    await ticket.reload();
+    if (!updated && ticket.reply !== reply) {
+      return res.status(409).json({ error: 'A reply has already been sent. Refresh the inbox to see it.' });
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.json({ ticket });
+  } catch (error) {
+    console.error('[support] reply_failed', error instanceof Error ? error.name : 'Unknown error');
+    return res.status(500).json({ error: 'Could not save the reply.' });
   }
 });
 

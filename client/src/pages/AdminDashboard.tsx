@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiUrl } from '../lib/api';
+import AdminSupportInbox from '../components/AdminSupportInbox';
 import { 
   ShieldAlert, 
   ShieldCheck, 
@@ -12,6 +13,7 @@ import {
   FileCheck, 
   Award, 
   Activity, 
+  MessageSquare,
   RefreshCw, 
   Search, 
   Download, 
@@ -146,7 +148,7 @@ export default function AdminDashboard() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'courses' | 'progress' | 'assessments' | 'certificates' | 'activity'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'support' | 'courses' | 'progress' | 'assessments' | 'certificates' | 'activity'>('users');
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -504,6 +506,18 @@ export default function AdminDashboard() {
 
           <button
             type="button"
+            onClick={() => setActiveTab('support')}
+            className={'py-2 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer whitespace-nowrap '
+              + (activeTab === 'support'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50')}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Support Inbox</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('courses')}
             className={`py-2 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer whitespace-nowrap ${
               activeTab === 'courses'
@@ -567,6 +581,10 @@ export default function AdminDashboard() {
             <span>Live Activity Feed</span>
           </button>
         </div>
+
+        {activeTab === 'support' && user?.role === 'admin' && token && (
+          <AdminSupportInbox key={user.id} token={token} />
+        )}
 
         {/* ---------------------------------------------------- */}
         {/* TAB 1: USERS DIRECTORY */}

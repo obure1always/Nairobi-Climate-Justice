@@ -441,6 +441,8 @@ export class SupportTicket extends Model {
   declare subject: string;
   declare message: string;
   declare status: 'open' | 'in_progress' | 'resolved';
+  declare reply: string | null;
+  declare repliedAt: Date | null;
   declare createdAt: Date;
 }
 SupportTicket.init({
@@ -452,6 +454,8 @@ SupportTicket.init({
   subject: { type: DataTypes.STRING, allowNull: false },
   message: { type: DataTypes.TEXT, allowNull: false },
   status: { type: DataTypes.STRING, defaultValue: 'open' },
+  reply: { type: DataTypes.TEXT, allowNull: true },
+  repliedAt: { type: DataTypes.DATE, allowNull: true },
 }, { sequelize, modelName: 'support_ticket' });
 
 export class UserSession extends Model {
@@ -521,6 +525,8 @@ export const setupDb = async () => {
   await ensureColumn('module_progresses', 'userId', 'VARCHAR(255)');
   await ensureColumn('sync_records', 'userId', 'VARCHAR(255)');
   await ensureColumn('quiz_submissions', 'clientEventId', 'VARCHAR(255)');
+  await ensureColumn('support_tickets', 'reply', 'TEXT');
+  await ensureColumn('support_tickets', 'repliedAt', 'DATETIME');
   await sequelize.query(
     'CREATE UNIQUE INDEX IF NOT EXISTS quiz_submissions_user_client_event_id ON quiz_submissions (userId, clientEventId) WHERE clientEventId IS NOT NULL;'
   );

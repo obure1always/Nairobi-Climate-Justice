@@ -140,6 +140,8 @@ CERTIFICATE_FROM_EMAIL=<verified sender address>
 
 Verify the sender domain/address with Resend before the live test. Delivery requires a persisted `emailVerified` account flag. Google sign-in sets it only when Google's verified-email claim is true; email/password and phone accounts are not treated as verified just because they have an address. Legacy Google accounts must sign in again to refresh the verified claim; older SQLite rows are not assumed verified. The same server-generated PDF bytes are attached to the email and returned by the authenticated dashboard download endpoint. A failed send is recorded in SQLite and can be retried from the dashboard; a send failure does not revoke or disable the certificate download. Completed progress and quiz syncs create an idempotent outbox entry, while repeated completion events do not resend a sent or failed delivery. Resend receives a stable per-certificate idempotency key.
 
+Administrators can open **Support Inbox** in the admin dashboard to see saved inquiries and reply to signed-in learners. Learners read those replies under **Help → My Support Inquiries**. Guest inquiries retain a contact address for manual email replies.
+
 The backend logs the resolved SQLite path at startup; its admin dashboard reports the same path. Do not rely on the deploy's working directory or a relative file path for persistent production storage.
 
 The backend does not create public demo accounts or passwords. Before the first start on an empty database, set `INITIAL_ADMIN_EMAIL` and a unique `INITIAL_ADMIN_PASSWORD` of at least 14 characters in the service environment. Once the administrator can sign in, remove the password variable; setup is skipped whenever an administrator already exists.
