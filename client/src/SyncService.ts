@@ -8,7 +8,7 @@ export class SyncService {
     entityType: SyncQueueItem['entityType'],
     entityData: object,
     ownerId = localStorage.getItem('climate_justice_owner_id') || '',
-    clientEventId = crypto.randomUUID()
+    clientEventId: string = crypto.randomUUID()
   ) {
     if (!ownerId) throw new Error('Cannot queue a learning event without an active owner');
     await db.syncQueue.add({

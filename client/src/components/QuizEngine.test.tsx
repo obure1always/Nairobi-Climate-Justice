@@ -51,7 +51,6 @@ describe('QuizEngine Component', () => {
     const nextButton = screen.getByRole('button', { name: /See Results|Finish/i });
     fireEvent.click(nextButton);
     
-    // onComplete should be called with score 1, total 1
-    expect(handleComplete).toHaveBeenCalledWith(1, 1, expect.objectContaining({ passed: true }));
+    expect(handleComplete).toHaveBeenCalledWith(1, 1, { q1: 1 });
   });
 });

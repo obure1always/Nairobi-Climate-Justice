@@ -34,7 +34,6 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setIsLoading(true);
 
     const loadData = async () => {
-      setIsLoading(true);
       try {
         const [accountRecords, currentSettings, accountLearningTime, allAchievements] = await Promise.all([
           db.accountProgress.where('ownerId').equals(ownerId).toArray(),
@@ -110,12 +109,12 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setAchievements(allAchievements.map(achievement => achievement.id));
       } catch (error) {
         console.error('Failed to load local data', error);
-      } finally {
-        if (active) setIsLoading(false);
       }
     };
 
-    void loadData();
+    void loadData().finally(() => {
+      if (active) setIsLoading(false);
+    });
     window.addEventListener('climate-justice-data-changed', loadData);
     return () => {
       active = false;

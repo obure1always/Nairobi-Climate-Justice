@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
@@ -59,6 +59,51 @@ interface LessonQuestionItem {
   createdAt: string;
 }
 
+interface QuizAttempt {
+  moduleId: string;
+  ownerId: string;
+  clientEventId: string;
+  answers: Record<string, number>;
+}
+
+interface QuizResult {
+  attempt: QuizAttempt;
+  score: number;
+  total: number;
+  status: 'saving' | 'queued' | 'saved' | 'save-error' | 'session-expired';
+  passed?: boolean;
+  certificateId?: string;
+}
+
+interface SavedQuizResult {
+  score: number;
+  totalQuestions: number;
+  passed: boolean;
+  certificate?: { id: string } | null;
+}
+
+const moduleAchievements: Record<string, string> = {
+  m1: 'FIRST_STEP',
+  m2: 'FLOOD_READY',
+  m3: 'HEAT_AWARE',
+  m4: 'WATER_WISE',
+  m5: 'JUSTICE_EXPLORER',
+  m6: 'CLAIM_CHECKER',
+  m7: 'COMMUNITY_VOICE'
+};
+
+function quizSessionToken(ownerId: string) {
+  if (localStorage.getItem('climate_justice_user_id') !== ownerId) return null;
+  return localStorage.getItem('climate_justice_token')
+    || sessionStorage.getItem('climate_justice_token')
+    || localStorage.getItem('auth_token');
+}
+
+function focusQuizResults(heading: HTMLHeadingElement | null) {
+  heading?.focus({ preventScroll: true });
+  heading?.scrollIntoView?.({ block: 'start' });
+}
+
 export default function LessonView() {
   const { moduleId } = useParams<{ moduleId: string }>();
   const navigate = useNavigate();
@@ -74,10 +119,9 @@ export default function LessonView() {
   
   const [viewState, setViewState] = useState<'intro' | 'lesson' | 'quiz_start' | 'quiz_active' | 'results'>('intro');
   const [currentLessonIndex, setCurrentLessonIndex] = useState(0);
-  const [quizScore, setQuizScore] = useState(0);
-  const [quizPassed, setQuizPassed] = useState<boolean | null>(null);
-  const [quizPending, setQuizPending] = useState(false);
-  const [pendingQuizEventId, setPendingQuizEventId] = useState<string | null>(null);
+  const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
+  const activeQuizAttempt = useRef<QuizAttempt | null>(null);
+  const confirmedQuizEventId = quizResult?.status === 'saved' ? quizResult.attempt.clientEventId : null;
   const [certificateId, setCertificateId] = useState<string | null>(null);
   const [pdfDownloadError, setPdfDownloadError] = useState<string | null>(null);
   const [quizAttempts, setQuizAttempts] = useState<Array<{
@@ -217,9 +261,7 @@ export default function LessonView() {
     if (!user || !moduleId) return;
     let active = true;
     const loadAttempts = async () => {
-      const token = sessionStorage.getItem('climate_justice_token')
-        || localStorage.getItem('climate_justice_token')
-        || localStorage.getItem('auth_token');
+      const token = quizSessionToken(user.id);
       if (!token) return;
       try {
         const response = await fetch(apiUrl('/assessments/my-results'), {
@@ -238,7 +280,7 @@ export default function LessonView() {
       active = false;
       window.removeEventListener('climate-justice-data-changed', loadAttempts);
     };
-  }, [user, moduleId]);
+  }, [user, moduleId, confirmedQuizEventId]);
 
   const currentLesson = moduleData.content[currentLessonIndex];
   const lessonMedia = currentLesson ? getLessonMedia(moduleData.id, currentLesson.id) : null;
@@ -468,72 +510,161 @@ export default function LessonView() {
     }
   };
 
-  const handleQuizComplete = async (
-    score: number,
-    _total: number,
-    completion?: { passed?: boolean; pending?: boolean; clientEventId?: string; certificateId?: string }
-  ) => {
-    setQuizScore(score);
-    setQuizPassed(completion?.passed ?? null);
-    setQuizPending(Boolean(completion?.pending));
-    setPendingQuizEventId(completion?.clientEventId || null);
-    setCertificateId(completion?.certificateId || null);
-    setViewState('results');
-    if (completion?.passed) await completeModule(moduleData.id);
-    
-    const achMap: Record<string, string> = {
-      m1: 'FIRST_STEP',
-      m2: 'FLOOD_READY',
-      m3: 'HEAT_AWARE',
-      m4: 'WATER_WISE',
-      m5: 'JUSTICE_EXPLORER',
-      m6: 'CLAIM_CHECKER',
-      m7: 'COMMUNITY_VOICE'
+  useEffect(() => {
+    return () => { activeQuizAttempt.current = null; };
+  }, [moduleId, user?.id]);
+
+  const confirmQuizResult = useCallback((quiz: QuizResult, saved: SavedQuizResult) => {
+    if (activeQuizAttempt.current !== quiz.attempt) return;
+    activeQuizAttempt.current = null;
+    setQuizResult({
+      ...quiz,
+      score: saved.score,
+      total: saved.totalQuestions,
+      passed: saved.passed,
+      certificateId: saved.certificate?.id,
+      status: 'saved'
+    });
+
+    if (saved.passed) {
+      const moduleId = quiz.attempt.moduleId;
+      void completeModule(moduleId).then(() => {
+        const achievement = moduleAchievements[moduleId];
+        if (achievement) return unlockAchievement(achievement);
+      });
+    }
+  }, [completeModule, unlockAchievement]);
+
+  const saveQuizResult = async (quiz: QuizResult) => {
+    const { attempt } = quiz;
+    const setStatus = (status: QuizResult['status']) => {
+      if (activeQuizAttempt.current === attempt) setQuizResult({ ...quiz, status });
     };
-    
-    if (completion?.passed && achMap[moduleData.id]) {
-      await unlockAchievement(achMap[moduleData.id]);
+    setStatus('saving');
+
+    const token = quizSessionToken(attempt.ownerId);
+    if (!token) {
+      setStatus('session-expired');
+      return;
+    }
+
+    if (navigator.onLine) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 10_000);
+      try {
+        const response = await fetch(apiUrl('/assessments/submit'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + token
+          },
+          body: JSON.stringify({
+            moduleId: attempt.moduleId,
+            answers: attempt.answers,
+            clientEventId: attempt.clientEventId
+          }),
+          signal: controller.signal
+        });
+        if (response.ok) {
+          const saved: SavedQuizResult | null = await response.json().catch(() => null);
+          if (saved && Number.isInteger(saved.score) && Number.isInteger(saved.totalQuestions)
+              && saved.totalQuestions > 0 && saved.score >= 0 && saved.score <= saved.totalQuestions
+              && typeof saved.passed === 'boolean') {
+            confirmQuizResult(quiz, saved);
+          } else {
+            setStatus('save-error');
+          }
+          return;
+        }
+        if (response.status === 401 || response.status === 403) {
+          setStatus('session-expired');
+          return;
+        }
+        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
+          setStatus('save-error');
+          return;
+        }
+      } catch (error) {
+        console.warn('Quiz submission could not reach the server', error);
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+
+    try {
+      await SyncService.queueRecord(
+        'QUIZ_ATTEMPT',
+        { moduleId: attempt.moduleId, answers: attempt.answers },
+        attempt.ownerId,
+        attempt.clientEventId
+      );
+      setStatus('queued');
+    } catch (error) {
+      console.error('Could not store the quiz attempt on this device', error);
+      setStatus('save-error');
     }
   };
 
+  const handleQuizComplete = (score: number, total: number, answers: Record<string, number>) => {
+    if (!user || activeQuizAttempt.current) return;
+    const attempt = {
+      moduleId: moduleData.id,
+      ownerId: user.id,
+      clientEventId: crypto.randomUUID(),
+      answers
+    };
+    activeQuizAttempt.current = attempt;
+    setViewState('results');
+    void saveQuizResult({ attempt, score, total, status: 'saving' });
+  };
+
   useEffect(() => {
-    if (!pendingQuizEventId || !user) return;
-    const handleSync = async (event: Event) => {
-      const eventIds = (event as CustomEvent<{ clientEventIds?: string[] }>).detail?.clientEventIds;
-      if (!eventIds?.includes(pendingQuizEventId)) return;
-      const token = sessionStorage.getItem('climate_justice_token')
-        || localStorage.getItem('climate_justice_token')
-        || localStorage.getItem('auth_token');
-      if (!token) return;
+    if (quizResult?.status !== 'queued') return;
+    const { attempt } = quizResult;
+    let active = true;
+
+    const refreshResult = async () => {
+      const token = quizSessionToken(attempt.ownerId);
+      if (!token || !navigator.onLine) return;
+      const headers = { Authorization: 'Bearer ' + token };
       try {
-        const [resultsResponse, certificateResponse] = await Promise.all([
-          fetch(apiUrl('/assessments/my-results'), { headers: { Authorization: `Bearer ${token}` } }),
-          fetch(apiUrl('/certificates/my-certificates'), { headers: { Authorization: `Bearer ${token}` } })
-        ]);
-        if (!resultsResponse.ok || !certificateResponse.ok) {
-          throw new Error('Could not reload the saved course result after syncing');
-        }
-        const [results, certificates] = await Promise.all([
-          resultsResponse.json(),
-          certificateResponse.json()
-        ]);
-        const result = results.find((item: { clientEventId?: string }) => item.clientEventId === pendingQuizEventId);
-        if (!result) return;
-        setQuizScore(result.score);
-        setQuizPassed(result.passed);
-        setQuizPending(false);
-        if (result.passed && moduleData) {
-          await completeModule(moduleData.id);
-          const cert = certificates.find((item: { pathwayId?: string }) => item.pathwayId === 'nairobi-climate-justice');
-          if (cert) setCertificateId(cert.id);
+        const response = await fetch(apiUrl('/assessments/my-results'), { headers });
+        if (!response.ok) throw new Error('Quiz results could not be loaded (' + response.status + ')');
+        const results: Array<SavedQuizResult & { clientEventId: string }> = await response.json();
+        const result = results.find(item => item.clientEventId === attempt.clientEventId);
+        if (!result || !active || activeQuizAttempt.current !== attempt) return;
+        confirmQuizResult(quizResult, result);
+
+        if (result.passed) {
+          const response = await fetch(apiUrl('/certificates/my-certificates'), { headers });
+          if (!response.ok) return;
+          const certificates: Array<{ id: string; pathwayId: string }> = await response.json();
+          const certificate = certificates.find(item => item.pathwayId === 'nairobi-climate-justice');
+          if (certificate) {
+            setQuizResult(current => current?.attempt === attempt
+              ? { ...current, certificateId: certificate.id }
+              : current);
+          }
         }
       } catch (error) {
         console.error('Could not refresh the server-confirmed quiz result', error);
       }
     };
+
+    const handleSync = (event: Event) => {
+      const eventIds = (event as CustomEvent<{ clientEventIds?: string[] }>).detail?.clientEventIds;
+      if (eventIds?.includes(attempt.clientEventId)) void refreshResult();
+    };
     window.addEventListener('climate-justice-sync-complete', handleSync);
-    return () => window.removeEventListener('climate-justice-sync-complete', handleSync);
-  }, [pendingQuizEventId, user, moduleData, completeModule]);
+    window.addEventListener('online', refreshResult);
+    // The queue may finish syncing before this screen starts listening.
+    void refreshResult();
+    return () => {
+      active = false;
+      window.removeEventListener('climate-justice-sync-complete', handleSync);
+      window.removeEventListener('online', refreshResult);
+    };
+  }, [quizResult, confirmQuizResult]);
 
   if (!foundModuleData) {
     return (
@@ -552,14 +683,28 @@ export default function LessonView() {
     t.speaker.toLowerCase().includes(transcriptSearch.toLowerCase())
   );
 
+  const resultCertificateId = quizResult?.certificateId || certificateId;
+  const quizSaveFailed = quizResult?.status === 'save-error' || quizResult?.status === 'session-expired';
+  const resultMessage = quizResult && {
+    saving: isSwahili ? 'Tunatuma majibu yako…' : 'Saving your attempt…',
+    queued: isSwahili
+      ? 'Matokeo yamehifadhiwa kwenye kifaa hiki. Yatathibitishwa mtandao utakaporudi.'
+      : 'Your attempt is saved on this device and awaiting server verification.',
+    saved: quizResult.passed
+      ? (isSwahili ? 'Umefaulu jaribio.' : 'You passed the quiz.')
+      : (isSwahili ? 'Jaribio halijafaulu. Unaweza kulirudia.' : 'You did not pass. You can retake the quiz.'),
+    'save-error': isSwahili ? 'Matokeo hayajahifadhiwa. Jaribu kuyahifadhi tena.' : 'Your attempt could not be saved. Try saving it again.',
+    'session-expired': isSwahili ? 'Ingia tena, kisha ujaribu kuhifadhi matokeo.' : 'Sign in again with this account, then retry saving.'
+  }[quizResult.status];
+
   const handleDownloadCertificate = async () => {
-    if (!certificateId) return;
+    if (!resultCertificateId) return;
     const token = sessionStorage.getItem('climate_justice_token')
       || localStorage.getItem('climate_justice_token')
       || localStorage.getItem('auth_token');
     if (!token) return;
     try {
-      const response = await fetch(apiUrl(`/certificates/${certificateId}/pdf`), {
+      const response = await fetch(apiUrl(`/certificates/${resultCertificateId}/pdf`), {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!response.ok) throw new Error(`Certificate download failed (${response.status})`);
@@ -567,7 +712,7 @@ export default function LessonView() {
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
-      link.download = `${certificateId}.pdf`;
+      link.download = `${resultCertificateId}.pdf`;
       link.click();
       URL.revokeObjectURL(objectUrl);
     } catch (error) {
@@ -1613,34 +1758,36 @@ export default function LessonView() {
         {/* QUIZ ACTIVE */}
         {viewState === 'quiz_active' && (
           <motion.div key="quiz_active" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-            <QuizEngine moduleId={moduleData.id} questions={moduleData.quiz} onComplete={handleQuizComplete} />
+            <QuizEngine questions={moduleData.quiz} onComplete={handleQuizComplete} />
           </motion.div>
         )}
 
         {/* RESULTS */}
-        {viewState === 'results' && (
+        {viewState === 'results' && quizResult && (
           <motion.div key="results" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-xl mx-auto p-6 md:p-12 text-center mt-10 bg-white rounded-organic shadow-natural">
-            <div className="mb-6">
-              <span className="text-6xl font-black text-forest-green">{quizScore}</span>
-              <span className="text-3xl text-gray-400 font-bold"> / {moduleData.quiz.length}</span>
-            </div>
-            
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">
-              {quizPending
-                ? (isSwahili ? 'Jaribio Linasubiri Uthibitisho' : 'Quiz Pending Verification')
-                : quizPassed === false
-                  ? (isSwahili ? 'Jaribio Halijafaulu' : 'Quiz Not Passed')
-                  : (isSwahili ? 'Moduli Imekamilika!' : 'Module Completed!')}
+            <h2 ref={focusQuizResults} tabIndex={-1} className="scroll-mt-4 text-2xl font-bold text-gray-900 mb-4">
+              {isSwahili ? 'Matokeo ya Jaribio' : 'Quiz Results'}
             </h2>
-            <p className="text-gray-600 mb-8">
-              {quizPending
-                ? 'This offline attempt is saved and waiting for server grading after reconnection.'
-                : quizPassed === false
-                  ? `You scored ${Math.round((quizScore / moduleData.quiz.length) * 100)}%. Pass mark: 70%. Retake the quiz to complete this module.`
-                  : isSwahili
-                    ? 'Umekamilisha masomo na maswali ya moduli hii. Unaweza kuendelea au kurudia maswali.'
-                    : 'You have completed all required lessons and passed this module assessment.'}
+            <p className="mb-3">
+              <span className="text-6xl font-black text-forest-green">{quizResult.score}</span>
+              <span className="text-3xl text-gray-600 font-bold"> / {quizResult.total}</span>
             </p>
+            <p className="text-xl font-bold text-gray-900 mb-2">
+              {Math.round(quizResult.score / quizResult.total * 100)}%
+            </p>
+            <p className="text-sm text-gray-600 mb-2">{isSwahili ? 'Alama ya kufaulu' : 'Pass mark'} 70%</p>
+            <p role={quizSaveFailed ? 'alert' : 'status'} className="text-gray-600 mb-8">
+              {resultMessage}
+            </p>
+            {quizSaveFailed && (
+              <button
+                type="button"
+                onClick={() => void saveQuizResult(quizResult)}
+                className="mb-8 w-full bg-forest-green text-white py-3 rounded-full font-bold hover:bg-forest-green/90 transition"
+              >
+                {isSwahili ? 'Jaribu Kuhifadhi Tena' : 'Retry Save'}
+              </button>
+            )}
 
             <section className="mb-8 text-left rounded-2xl bg-gray-50 border border-gray-200 p-4">
               <h3 className="font-bold text-sm text-gray-900 mb-2">Required lessons</h3>
@@ -1674,7 +1821,7 @@ export default function LessonView() {
             </section>
 
             <div className="space-y-3">
-              {certificateId && (
+              {resultCertificateId && (
                 <button
                   onClick={() => void handleDownloadCertificate()}
                   className="w-full bg-amber-500 text-white py-3.5 rounded-full font-bold hover:bg-amber-600 transition shadow-natural"
@@ -1688,13 +1835,20 @@ export default function LessonView() {
               >
                 {isSwahili ? 'Rudi Kwenye Moduli Zote' : 'Explore More Modules'}
               </button>
-              <button 
-                onClick={() => setViewState('quiz_active')}
-                className="w-full bg-cream-bg text-earth-brown py-3 rounded-full font-bold hover:bg-earth-brown/10 border border-earth-brown/20 transition flex items-center justify-center gap-2"
-              >
-                <RotateCcw className="w-4 h-4" />
-                {isSwahili ? 'Jaribu Jaribio Tena' : 'Retake Quiz'}
-              </button>
+              {quizResult.status !== 'saving' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    activeQuizAttempt.current = null;
+                    setQuizResult(null);
+                    setViewState('quiz_active');
+                  }}
+                  className="w-full bg-cream-bg text-earth-brown py-3 rounded-full font-bold hover:bg-earth-brown/10 border border-earth-brown/20 transition flex items-center justify-center gap-2"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  {isSwahili ? 'Rudia Jaribio' : 'Retake Quiz'}
+                </button>
+              )}
             </div>
           </motion.div>
         )}

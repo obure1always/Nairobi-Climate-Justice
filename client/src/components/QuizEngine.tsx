@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   CheckCircle, 
@@ -8,15 +8,6 @@ import {
 } from 'lucide-react';
 import type { QuizQuestion } from '../data/modules';
 import { useLanguage } from '../LanguageContext';
-import { SyncService } from '../SyncService';
-import { apiUrl } from '../lib/api';
-
-interface QuizCompletion {
-  passed?: boolean;
-  pending?: boolean;
-  clientEventId?: string;
-  certificateId?: string;
-}
 
 export interface ScenarioOption {
   id: string;
@@ -82,14 +73,12 @@ export const climateMatchingExercises: MatchingPair[] = [
 
 interface QuizEngineProps {
   questions: QuizQuestion[];
-  moduleId?: string;
   includeKenyaScenario?: boolean;
-  onComplete: (score: number, total: number, completion?: QuizCompletion) => void;
+  onComplete: (score: number, total: number, answers: Record<string, number>) => void;
 }
 
 export const QuizEngine: React.FC<QuizEngineProps> = ({ 
   questions, 
-  moduleId, 
   includeKenyaScenario = false, 
   onComplete 
 }) => {
@@ -98,45 +87,17 @@ export const QuizEngine: React.FC<QuizEngineProps> = ({
   const [isAnswered, setIsAnswered] = useState(false);
   const [score, setScore] = useState(0);
   const [answers, setAnswers] = useState<Record<string, number>>({});
-  const [clientEventId] = useState(() => crypto.randomUUID());
 
   // Kenya Field Scenario stage
   const [inScenarioStage, setInScenarioStage] = useState(false);
   const [selectedScenarioOpt, setSelectedScenarioOpt] = useState<string | null>(null);
   const [scenarioAnswered, setScenarioAnswered] = useState(false);
 
-  // Final summary state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
   const { language } = useLanguage();
   const isSwahili = language === 'sw';
 
   const currentQuestion = questions[currentIndex];
   const isCorrect = currentQuestion && selectedOption === currentQuestion.correctAnswer;
-
-  useEffect(() => {
-    const handleSync = async (event: Event) => {
-      const eventIds = (event as CustomEvent<{ clientEventIds?: string[] }>).detail?.clientEventIds;
-      if (!eventIds?.includes(clientEventId) || !moduleId) return;
-      const token = sessionStorage.getItem('climate_justice_token')
-        || localStorage.getItem('climate_justice_token')
-        || localStorage.getItem('auth_token');
-      if (!token) return;
-      try {
-        const response = await fetch(apiUrl('/assessments/my-results'), {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (!response.ok) throw new Error(`Could not reload synced quiz results (${response.status})`);
-        const submissions = await response.json();
-        const result = submissions.find((item: { clientEventId?: string }) => item.clientEventId === clientEventId);
-        if (result) onComplete(result.score, result.totalQuestions, { passed: result.passed, pending: false });
-      } catch (error) {
-        console.error('Could not reload the saved quiz result', error);
-      }
-    };
-    window.addEventListener('climate-justice-sync-complete', handleSync);
-    return () => window.removeEventListener('climate-justice-sync-complete', handleSync);
-  }, [clientEventId, moduleId, onComplete]);
 
   const handleSelect = (index: number) => {
     if (!isAnswered) {
@@ -145,7 +106,7 @@ export const QuizEngine: React.FC<QuizEngineProps> = ({
   };
 
   const handleCheck = () => {
-    if (selectedOption === null || !currentQuestion) return;
+    if (isAnswered || selectedOption === null || !currentQuestion) return;
     
     setIsAnswered(true);
     setAnswers(previous => ({ ...previous, [currentQuestion.id]: selectedOption }));
@@ -163,7 +124,7 @@ export const QuizEngine: React.FC<QuizEngineProps> = ({
       // Transition to Kenya dilemma stage
       setInScenarioStage(true);
     } else {
-      void submitQuiz(score, questions.length);
+      onComplete(score, questions.length, answers);
     }
   };
 
@@ -174,109 +135,12 @@ export const QuizEngine: React.FC<QuizEngineProps> = ({
   };
 
   const handleCheckScenario = () => {
-    if (!selectedScenarioOpt) return;
+    if (scenarioAnswered || !selectedScenarioOpt) return;
     setScenarioAnswered(true);
     const chosen = kenyaScenarioDilemma.options.find(o => o.id === selectedScenarioOpt);
     if (chosen?.isOptimal) {
       setScore(s => s + 1);
     }
-  };
-
-  const submitLegacyAssessment = async () => {
-    setIsSubmitting(true);
-    const totalWithScenario = questions.length + 1;
-    const finalScore = score + (selectedScenarioOpt === 'ke-opt-1' ? 1 : 0);
-
-    // Persist to server if authenticated
-    const token = sessionStorage.getItem('climate_justice_token') || localStorage.getItem('climate_justice_token') || localStorage.getItem('auth_token');
-    if (token && moduleId) {
-      try {
-        await fetch(apiUrl('/assessments/submit'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            moduleId,
-            answers,
-            clientEventId,
-            scenarioDilemmaChoice: selectedScenarioOpt
-          })
-        });
-      } catch (err) {
-        // non-blocking
-      }
-    }
-
-    setIsSubmitting(false);
-    onComplete(finalScore, totalWithScenario);
-  };
-  void submitLegacyAssessment;
-
-  const submitQuiz = async (localScore: number, localTotal: number) => {
-    setIsSubmitting(true);
-    const token = sessionStorage.getItem('climate_justice_token')
-      || localStorage.getItem('climate_justice_token')
-      || localStorage.getItem('auth_token');
-    if (!token || !moduleId) {
-      setIsSubmitting(false);
-      onComplete(localScore, localTotal, {
-        passed: localScore / localTotal >= 0.7,
-        pending: false,
-        clientEventId
-      });
-      return;
-    }
-
-    try {
-      if (!navigator.onLine) throw new Error('OFFLINE');
-      const response = await fetch(apiUrl('/assessments/submit'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ moduleId, answers, clientEventId })
-      });
-      if (!response.ok) {
-        if (response.status < 500) throw new Error(`Quiz submission rejected (${response.status})`);
-        throw new Error('TEMPORARY_SERVER_ERROR');
-      }
-      const result = await response.json();
-      onComplete(result.score, result.totalQuestions, {
-        passed: result.passed,
-        pending: false,
-        clientEventId,
-        certificateId: result.certificate?.id
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!navigator.onLine || message === 'OFFLINE' || message === 'TEMPORARY_SERVER_ERROR' ||
-          message.includes('Failed to fetch') || message.includes('NetworkError')) {
-        try {
-          await SyncService.queueRecord(
-            'QUIZ_ATTEMPT',
-            { moduleId, answers },
-            localStorage.getItem('climate_justice_owner_id') || '',
-            clientEventId
-          );
-          onComplete(localScore, localTotal, { pending: true, clientEventId });
-        } catch (queueError) {
-          console.error('Could not queue the offline quiz attempt', queueError);
-        }
-      } else {
-        console.error(message);
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleFinishAssessment = () => {
-    const totalWithScenario = questions.length + 1;
-    const finalScore = score + (selectedScenarioOpt === 'ke-opt-1' ? 1 : 0);
-    void submitQuiz(finalScore, totalWithScenario);
   };
 
   // If in Scenario Dilemma Stage
@@ -370,11 +234,10 @@ export const QuizEngine: React.FC<QuizEngineProps> = ({
               </button>
             ) : (
               <button
-                onClick={handleFinishAssessment}
-                disabled={isSubmitting}
+                onClick={() => onComplete(score, questions.length + 1, answers)}
                 className="bg-forest-green text-white px-8 py-3 rounded-xl font-bold hover:bg-forest-green/90 transition flex items-center gap-2 shadow-sm"
               >
-                <span>{isSubmitting ? 'Evaluating...' : (isSwahili ? 'Kamilisha Jaribio' : 'See Results')}</span>
+                <span>{isSwahili ? 'Ona Matokeo' : 'See Results'}</span>
                 <ArrowRight className="w-5 h-5" />
               </button>
             )}
