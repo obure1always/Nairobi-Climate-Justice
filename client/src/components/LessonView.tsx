@@ -40,7 +40,7 @@ import {
 import { QuizEngine } from './QuizEngine';
 import MarkdownRenderer from './MarkdownRenderer';
 import { generateComprehensiveStudyNotes } from '../lib/studyNotes';
-import { downloadModulePdf, downloadStudyNotesPdf } from '../lib/pdfDocuments';
+import { downloadStudyNotesPdf } from '../lib/pdfDocuments';
 import { 
   speakText, 
   pauseSpeech, 
@@ -218,6 +218,7 @@ export default function LessonView() {
     setIsVideoPlaying(false);
     setIsBookmarked(false);
     setBookmarkFeedback(null);
+    setPdfDownloadError(null);
     setCertificateDownloadError(null);
   }, [viewState, currentLessonIndex]);
 
@@ -441,18 +442,6 @@ export default function LessonView() {
       setBookmarkFeedback(isSwahili ? 'Imehifadhiwa' : 'Bookmarked');
     }
     setTimeout(() => setBookmarkFeedback(null), 3000);
-  };
-
-  const handleDownloadModulePdf = async () => {
-    try {
-      setPdfDownloadError(null);
-      await downloadModulePdf(moduleData, language);
-    } catch (error) {
-      console.error('Could not generate the module PDF', error);
-      setPdfDownloadError(isSwahili
-        ? 'PDF haikuweza kutengenezwa. Tafadhali jaribu tena.'
-        : 'The PDF could not be generated. Please try again.');
-    }
   };
 
   const handleDownloadNotes = async () => {
@@ -824,18 +813,7 @@ export default function LessonView() {
                   <Trophy className="w-4 h-4" />
                   {moduleQuizLabel}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDownloadModulePdf()}
-                  className="px-6 py-3 rounded-full border border-forest-green text-forest-green font-bold hover:bg-emerald-50 transition flex items-center justify-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  {isSwahili ? 'Pakua PDF ya Moduli' : 'Download Module PDF'}
-                </button>
               </div>
-              {pdfDownloadError && (
-                <p role="alert" className="mb-4 text-sm text-red-700">{pdfDownloadError}</p>
-              )}
 
               <div className="bg-white rounded-organic p-6 md:p-8 shadow-natural border border-gray-100 mb-8">
                 <div className="flex items-center justify-between mb-4">
@@ -1261,6 +1239,10 @@ export default function LessonView() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {pdfDownloadError && (
+              <p role="alert" className="mb-4 text-sm text-red-700">{pdfDownloadError}</p>
             )}
 
             {/* COURSERA-STYLE TAB NAVIGATION */}

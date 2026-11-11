@@ -1,10 +1,8 @@
 import type { Color, PDFFont, PDFPage } from 'pdf-lib';
-import type { LessonContent, ModuleData } from '../data/modules.en';
 
 type PdfBlock = {
-  kind: 'title' | 'heading' | 'paragraph' | 'bullet' | 'numbered' | 'source';
+  kind: 'title' | 'heading' | 'paragraph' | 'bullet' | 'numbered';
   text: string;
-  url?: string;
   listNumber?: number;
 };
 
@@ -183,70 +181,6 @@ const markdownBlocks = (markdown: string, title: string): PdfBlock[] => {
   return blocks;
 };
 
-const explicitSourceUrl = (source: string): string | undefined => {
-  const match = source.match(/https?:\/\/[^\s)]+/);
-  return match?.[0].replace(/[.,;:!?]+$/, '');
-};
-
-const lessonBlocks = (lesson: LessonContent, index: number, sw: boolean): PdfBlock[] => {
-  const blocks: PdfBlock[] = [
-    { kind: 'heading', text: `${sw ? 'Somo' : 'Lesson'} ${index + 1}: ${lesson.heading}` },
-    { kind: 'heading', text: sw ? 'Malengo ya Kujifunza' : 'Learning Objectives' },
-    ...lesson.objectives.map(text => ({ kind: 'bullet' as const, text })),
-    ...lesson.paragraphs.map(text => ({ kind: 'paragraph' as const, text }))
-  ];
-  if (lesson.nairobiExample) {
-    blocks.push(
-      { kind: 'heading', text: sw ? 'Mfano wa Nairobi' : 'Nairobi Example' },
-      { kind: 'paragraph', text: lesson.nairobiExample }
-    );
-  }
-  if (lesson.keyTerms.length) {
-    blocks.push({ kind: 'heading', text: sw ? 'Maneno Muhimu' : 'Key Terms' });
-    blocks.push(...lesson.keyTerms.map(term => ({
-      kind: 'bullet' as const,
-      text: `**${term.term}:** ${term.definition}`
-    })));
-  }
-  if (lesson.takeaways.length) {
-    blocks.push({ kind: 'heading', text: sw ? 'Mambo Muhimu ya Kukumbuka' : 'Key Takeaways' });
-    blocks.push(...lesson.takeaways.map(text => ({ kind: 'bullet' as const, text })));
-  }
-  if (lesson.reflectionQuestion) {
-    blocks.push(
-      { kind: 'heading', text: sw ? 'Swali la Tafakari ya Jamii' : 'Community Reflection' },
-      { kind: 'paragraph', text: lesson.reflectionQuestion }
-    );
-  }
-  if (lesson.activity) {
-    blocks.push(
-      { kind: 'heading', text: sw ? 'Shughuli ya Vitendo' : 'Practical Activity' },
-      { kind: 'paragraph', text: lesson.activity }
-    );
-  }
-  if (lesson.misconceptions.length) {
-    blocks.push({ kind: 'heading', text: sw ? 'Dhana Potofu na Marekebisho' : 'Misconceptions and Corrections' });
-    for (const item of lesson.misconceptions) {
-      blocks.push({ kind: 'bullet', text: `**${sw ? 'Dhana Potofu' : 'Misconception'}:** ${item.misconception}` });
-      blocks.push({ kind: 'paragraph', text: `**${sw ? 'Marekebisho' : 'Correction'}:** ${item.correction}` });
-    }
-  }
-  if (lesson.sources.length || lesson.relatedLinks?.length) {
-    blocks.push({ kind: 'heading', text: sw ? 'Marejeleo na Viungo' : 'Sources and Links' });
-    blocks.push(...lesson.sources.map(text => ({
-      kind: 'source' as const,
-      text,
-      ...(explicitSourceUrl(text) ? { url: explicitSourceUrl(text) } : {})
-    })));
-    blocks.push(...(lesson.relatedLinks || []).map(item => ({
-      kind: 'source' as const,
-      text: item.title,
-      url: item.link
-    })));
-  }
-  return blocks;
-};
-
 const drawBlocks = (
   document: Awaited<ReturnType<typeof pdfDocument>>['document'],
   initialPage: PDFPage,
@@ -349,8 +283,7 @@ const drawBlocks = (
       drawRuns(formatInline(`${marker}${block.text}`), BODY_SIZE, colors.ink, MARGIN + 6, CONTENT_WIDTH - 6, 15, 2);
     } else {
       const runs = formatInline(block.text);
-      if (block.url && !runs.some(run => run.url) && runs[0]) runs[0] = { ...runs[0], url: block.url };
-      drawRuns(runs, BODY_SIZE, block.kind === 'source' ? colors.muted : colors.ink, MARGIN, CONTENT_WIDTH, 15, 2);
+      drawRuns(runs, BODY_SIZE, colors.ink, MARGIN, CONTENT_WIDTH, 15, 2);
     }
   }
 
@@ -402,20 +335,6 @@ const downloadPdf = (bytes: Uint8Array, filename: string) => {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-};
-
-export const createModulePdf = (module: ModuleData, language: 'en' | 'sw') => {
-  const sw = language === 'sw';
-  const blocks: PdfBlock[] = [
-    { kind: 'paragraph', text: module.description },
-    ...module.content.flatMap((lesson, index) => lessonBlocks(lesson, index, sw))
-  ];
-  return buildPdf(module.title, blocks);
-};
-
-export const downloadModulePdf = async (module: ModuleData, language: 'en' | 'sw') => {
-  const bytes = await createModulePdf(module, language);
-  downloadPdf(bytes, `${module.id}-${language}-module.pdf`);
 };
 
 export const createStudyNotesPdf = (markdown: string, title: string) =>

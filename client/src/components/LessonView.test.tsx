@@ -77,6 +77,7 @@ describe('Module quizzes and lesson text', () => {
 
   it('opens the existing quiz directly from the module overview after all lessons are saved', async () => {
     openModule(courseModule.content.map((_, index) => index));
+    expect(screen.queryByRole('button', { name: /download module/i })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Module Quiz' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Start Quiz' }));

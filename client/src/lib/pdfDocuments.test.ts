@@ -4,8 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { PDFDict, PDFDocument, PDFName, PDFPage, PDFString } from 'pdf-lib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { modules } from '../data/modules';
-import { createModulePdf, createStudyNotesPdf } from './pdfDocuments';
+import { createStudyNotesPdf } from './pdfDocuments';
 
 const fontFiles = {
   '/fonts/NotoSans-Regular.ttf': resolve('public/fonts/NotoSans-Regular.ttf'),
@@ -26,20 +25,6 @@ describe('PDF documents', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
-
-  it('creates a multipage A4 module PDF with static Unicode regular and bold fonts', async () => {
-    for (const language of ['en', 'sw'] as const) {
-      const module = modules[language].find(item => item.id === 'm2');
-      if (!module) throw new Error(`Urban Flooding module missing for ${language}`);
-      const bytes = await createModulePdf(module, language);
-      const pdf = await PDFDocument.load(bytes);
-      expect(pdf.getPageCount()).toBeGreaterThan(1);
-      for (const page of pdf.getPages()) {
-        expect(page.getWidth()).toBeCloseTo(595.28, 1);
-        expect(page.getHeight()).toBeCloseTo(841.89, 1);
-      }
-    }
-  }, 20_000);
 
   it('adds a clickable link annotation for explicit Markdown URLs', async () => {
     const bytes = await createStudyNotesPdf(
