@@ -16,7 +16,7 @@ import {
 import { createSession, hashPassword } from '../src/services/authService';
 import { COURSE_MODULES } from '../src/services/courseCatalog';
 import { attemptCertificateEmail } from '../src/services/certificateEmail';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFPage } from 'pdf-lib';
 
 describe('Core Learning Experience & Institutional API Endpoints', () => {
   let learnerToken: string;
@@ -400,6 +400,81 @@ describe('Core Learning Experience & Institutional API Endpoints', () => {
       expect(savedCertificate?.issueDate.getTime()).toBe(originalIssueDate);
       expect(savedDelivery?.attemptCount).toBe(2);
       expect(savedDelivery?.status).toBe('sent');
+    });
+
+    it('saves the final quiz for an unnamed account and downloads its personalized certificate after a profile update', async () => {
+      const learner = await User.create({ email: 'learner-without-name@example.test', role: 'learner', authProvider: 'email' });
+      const authorization = 'Bearer ' + await createSession(learner.id);
+      await LessonProgress.bulkCreate(COURSE_MODULES.flatMap(module =>
+        module.lessons.map(lessonId => ({ userId: learner.id, moduleId: module.id, lessonId, completed: true }))
+      ));
+      await QuizSubmission.bulkCreate(COURSE_MODULES.slice(0, -1).map(module => ({
+        userId: learner.id,
+        moduleId: module.id,
+        score: module.questions.length,
+        totalQuestions: module.questions.length,
+        passed: true
+      })));
+
+      const lastModule = COURSE_MODULES[COURSE_MODULES.length - 1];
+      const attempt = await request(app)
+        .post('/api/v1/assessments/submit')
+        .set('Authorization', authorization)
+        .send({
+          moduleId: lastModule.id,
+          clientEventId: 'unnamed-account-final-quiz',
+          answers: Object.fromEntries(lastModule.questions.map(question => [question.id, question.correctAnswer]))
+        })
+        .expect(201);
+      expect(attempt.body.passed).toBe(true);
+      expect(attempt.body.certificate).toBeNull();
+
+      const learnerName = 'Njeri Wambũi';
+      const profile = await request(app)
+        .patch('/api/v1/auth/profile')
+        .set('Authorization', authorization)
+        .send({ name: '  ' + learnerName + '  ' })
+        .expect(200);
+      expect(profile.body.user.emailVerified).toBe(false);
+      const certificates = await request(app)
+        .get('/api/v1/certificates/my-certificates')
+        .set('Authorization', authorization)
+        .expect(200);
+      expect(certificates.body).toHaveLength(1);
+      expect(certificates.body[0]).toMatchObject({ learnerName, emailDeliveryStatus: 'blocked' });
+
+      const { id } = certificates.body[0];
+      const pdfPath = '/api/v1/certificates/' + id + '/pdf';
+      await request(app).get(pdfPath).expect(401);
+      await request(app).get(pdfPath).set('Authorization', 'Bearer ' + learnerToken).expect(404);
+
+      // Older records could have the generic title in place of the learner's name.
+      await Certificate.update({ learnerName: 'Climate Justice Scholar' }, { where: { id } });
+      const drawText = jest.spyOn(PDFPage.prototype, 'drawText');
+      const originalEnv = process.env;
+      process.env = { ...originalEnv, NODE_ENV: 'production' };
+      delete process.env.CERTIFICATE_SIGNATURE_PATH;
+      try {
+        const response = await request(app)
+          .get(pdfPath)
+          .set('Authorization', authorization)
+          .expect(200)
+          .expect('Content-Type', /application\/pdf/);
+        const bytes = Buffer.from(response.body);
+        expect((await PDFDocument.load(bytes)).getPageCount()).toBe(1);
+        expect(drawText.mock.calls.some(([text]) => text === learnerName)).toBe(true);
+        expect(drawText.mock.calls.some(([text]) => text === 'ISSUED BY')).toBe(true);
+        if (process.env.CERTIFICATE_TEST_PDF_OUTPUT) {
+          await writeFile(process.env.CERTIFICATE_TEST_PDF_OUTPUT, bytes);
+        }
+      } finally {
+        process.env = originalEnv;
+        drawText.mockRestore();
+      }
+
+      const verification = await request(app).get('/api/v1/certificates/verify/' + id).expect(200);
+      expect(verification.body).toMatchObject({ verified: true, certificateId: id, learnerName });
+      expect((await CertificateDelivery.findByPk(id))?.status).toBe('blocked');
     });
 
     it('returns 404 for nonexistent certificate verification', async () => {

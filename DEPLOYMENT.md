@@ -101,7 +101,7 @@ Copy `server/.env.example` to `server/.env` and supply production values:
 | `GOOGLE_CLIENT_ID` | No | *(None)* | Google OAuth Web Client ID for Google One-Tap sign-in. |
 | `GROQ_API_KEY` | No | *(None)* | GroqCloud API key for online AI assistant (falls back to offline). |
 | `OPENAI_API_KEY` | No | *(None)* | OpenAI key for neural TTS (falls back to Web Speech API). |
-| `CERTIFICATE_SIGNATURE_PATH` | Yes for production certificates | `/var/data/certificate-signature.png` | Private PNG/JPEG path outside the static client directory. |
+| `CERTIFICATE_SIGNATURE_PATH` | Yes for signed certificate emails in production | `/var/data/certificate-signature.png` | Private PNG/JPEG path outside the static client directory. |
 | `CERTIFICATE_EMAIL_PROVIDER` | Yes for certificate emails | `resend` | Configures the Resend adapter. |
 | `RESEND_API_KEY` | Yes for certificate emails | *(None)* | Resend API key; set only in Render's private environment. |
 | `CERTIFICATE_FROM_EMAIL` | Yes for certificate emails | *(None)* | Verified sender address for Resend. |
@@ -128,7 +128,7 @@ Use the same service disk for the approved signature image, but keep the file ou
 CERTIFICATE_SIGNATURE_PATH=/var/data/certificate-signature.png
 ```
 
-Privately upload the approved PNG or JPEG to that exact path using the service's private shell/secure transfer workflow, restrict its permissions to the server user, and never commit it or place it under a public directory. Certificate PDF creation fails explicitly in production if the image is missing or unreadable; the signed image is embedded by the server and is not exposed as a static asset.
+Privately upload the approved PNG or JPEG to that exact path and restrict its permissions to the server user. The server embeds the image in the PDF. When the image is unavailable, an authenticated learner can still download their earned certificate with the issuer's printed name. Production certificate emails require the approved image.
 
 Certificate email settings use the Resend adapter:
 

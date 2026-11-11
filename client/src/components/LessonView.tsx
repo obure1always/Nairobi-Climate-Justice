@@ -4,6 +4,7 @@ import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
 import { useAuth } from '../contexts/AuthContext';
 import { apiUrl } from '../lib/api';
+import { downloadCertificatePdf } from '../lib/certificates';
 import { SyncService } from '../SyncService';
 import { modules } from '../data/modules';
 import { getLessonMedia, estimateReadingTimeMinutes } from '../data/lessonMedia';
@@ -110,7 +111,7 @@ export default function LessonView() {
   const location = useLocation();
   const { language } = useLanguage();
   const { progress, updateLessonProgress, completeModule, unlockAchievement } = useProgress();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   
   const isSwahili = language === 'sw';
   const currentModules = modules[language];
@@ -123,6 +124,7 @@ export default function LessonView() {
   const activeQuizAttempt = useRef<QuizAttempt | null>(null);
   const confirmedQuizEventId = quizResult?.status === 'saved' ? quizResult.attempt.clientEventId : null;
   const [certificateId, setCertificateId] = useState<string | null>(null);
+  const [certificateDownloadError, setCertificateDownloadError] = useState<string | null>(null);
   const [pdfDownloadError, setPdfDownloadError] = useState<string | null>(null);
   const [quizAttempts, setQuizAttempts] = useState<Array<{
     id: string;
@@ -216,6 +218,7 @@ export default function LessonView() {
     setIsVideoPlaying(false);
     setIsBookmarked(false);
     setBookmarkFeedback(null);
+    setCertificateDownloadError(null);
   }, [viewState, currentLessonIndex]);
 
   useEffect(() => {
@@ -698,25 +701,12 @@ export default function LessonView() {
   }[quizResult.status];
 
   const handleDownloadCertificate = async () => {
-    if (!resultCertificateId) return;
-    const token = sessionStorage.getItem('climate_justice_token')
-      || localStorage.getItem('climate_justice_token')
-      || localStorage.getItem('auth_token');
-    if (!token) return;
+    if (!resultCertificateId || !token) return;
+    setCertificateDownloadError(null);
     try {
-      const response = await fetch(apiUrl(`/certificates/${resultCertificateId}/pdf`), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!response.ok) throw new Error(`Certificate download failed (${response.status})`);
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = `${resultCertificateId}.pdf`;
-      link.click();
-      URL.revokeObjectURL(objectUrl);
+      await downloadCertificatePdf(resultCertificateId, token);
     } catch (error) {
-      console.error('Could not download the certificate', error);
+      setCertificateDownloadError(error instanceof Error ? error.message : 'Could not download your certificate.');
     }
   };
 
@@ -1826,8 +1816,11 @@ export default function LessonView() {
                   onClick={() => void handleDownloadCertificate()}
                   className="w-full bg-amber-500 text-white py-3.5 rounded-full font-bold hover:bg-amber-600 transition shadow-natural"
                 >
-                  Download Certificate
+                  {isSwahili ? 'Pakua Cheti' : 'Download Certificate'}
                 </button>
+              )}
+              {certificateDownloadError && (
+                <p role="alert" className="text-sm text-red-700">{certificateDownloadError}</p>
               )}
               <button 
                 onClick={() => navigate('/learn')}

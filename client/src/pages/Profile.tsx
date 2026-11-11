@@ -382,7 +382,7 @@ export default function Profile() {
                     <p className="text-[11px] text-gray-500 mt-0.5">
                       {user.emailVerified 
                         ? 'Confirmed through Google authentication provider.'
-                        : 'Transactional verification email service is pending production deployment. All learning features remain fully accessible.'}
+                        : 'Earned certificates are available to download from your dashboard.'}
                     </p>
                   </div>
                 </div>

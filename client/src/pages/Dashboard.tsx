@@ -5,6 +5,7 @@ import { useProgress } from '../contexts/ProgressContext';
 import { useAuth } from '../contexts/AuthContext';
 import { modules } from '../data/modules';
 import { apiUrl } from '../lib/api';
+import { downloadCertificatePdf } from '../lib/certificates';
 import { 
   Play, 
   Award, 
@@ -24,6 +25,7 @@ import {
 
 interface ServerCertificate {
   id: string;
+  learnerName: string | null;
   courseTitle: string;
   issueDate: string;
   emailDeliveryStatus?: 'pending' | 'sending' | 'sent' | 'failed' | 'blocked' | 'not_sent';
@@ -76,27 +78,22 @@ export default function Dashboard() {
 
   // Fetch server data for authenticated users
   useEffect(() => {
-    const token = sessionStorage.getItem('climate_justice_token') || localStorage.getItem('climate_justice_token') || localStorage.getItem('auth_token');
-    if (!token) {
-      return;
-    }
+    if (!token || !user?.id) return;
+    const ownerId = user.id;
+    const controller = new AbortController();
+    const request = { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal };
 
     Promise.all([
-      fetch(apiUrl('/certificates/my-certificates'), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      }).then(r => r.ok ? r.json() : { certificates: [] }),
+      fetch(apiUrl('/certificates/my-certificates'), request).then(r => r.ok ? r.json() : { certificates: [] }),
 
-      fetch(apiUrl('/learning/bookmarks'), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      }).then(r => r.ok ? r.json() : { bookmarks: [] }),
+      fetch(apiUrl('/learning/bookmarks'), request).then(r => r.ok ? r.json() : { bookmarks: [] }),
 
-      fetch(apiUrl('/assessments/my-results'), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      }).then(r => r.ok ? r.json() : { submissions: [] })
+      fetch(apiUrl('/assessments/my-results'), request).then(r => r.ok ? r.json() : { submissions: [] })
     ])
       .then(([certsData, bmarksData, quizesData]) => {
+        if (controller.signal.aborted) return;
         setServerData({
-          ownerId: user?.id || '',
+          ownerId,
           certificates: Array.isArray(certsData) ? certsData : certsData?.certificates || [],
           bookmarks: bmarksData?.bookmarks || [],
           quizResults: Array.isArray(quizesData) ? quizesData : quizesData?.submissions || []
@@ -105,43 +102,28 @@ export default function Dashboard() {
       .catch(() => {
         // graceful offline fallback
       });
+    return () => controller.abort();
   }, [token, user?.id, refreshVersion]);
 
   const downloadCertificate = async (certificateId: string) => {
-    const activeToken = sessionStorage.getItem('climate_justice_token')
-      || localStorage.getItem('climate_justice_token')
-      || localStorage.getItem('auth_token');
-    if (!activeToken) return;
+    if (!token) return;
     setCertificateDownloadError(null);
     try {
-      const response = await fetch(apiUrl(`/certificates/${certificateId}/pdf`), {
-        headers: { Authorization: `Bearer ${activeToken}` }
-      });
-      if (!response.ok) throw new Error(`Certificate download failed (${response.status})`);
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${certificateId}.pdf`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await downloadCertificatePdf(certificateId, token);
     } catch (error) {
-      console.error('Could not download the certificate', error);
-      setCertificateDownloadError('The certificate could not be downloaded right now. Please try again later.');
+      setCertificateDownloadError(error instanceof Error ? error.message : 'Could not download your certificate.');
     }
   };
 
   const retryCertificateEmail = async (certificateId: string) => {
-    const activeToken = sessionStorage.getItem('climate_justice_token')
-      || localStorage.getItem('climate_justice_token')
-      || localStorage.getItem('auth_token');
-    if (!activeToken) return;
+    if (!token) return;
 
     setRetryingCertificateId(certificateId);
     setEmailRetryError(null);
     try {
       const response = await fetch(apiUrl(`/certificates/${certificateId}/email/retry`), {
         method: 'POST',
-        headers: { Authorization: 'Bearer ' + activeToken }
+        headers: { Authorization: 'Bearer ' + token }
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `Email retry failed (${response.status})`);
@@ -560,15 +542,15 @@ export default function Dashboard() {
                 <div className="p-5 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-xs text-gray-500">
                   <ShieldCheck className="w-8 h-8 text-gray-400 mx-auto mb-2 opacity-50" />
                   <p className="font-semibold text-gray-700 mb-1">No Certificates Issued Yet</p>
-                  <p className="text-[11px] text-gray-500">
-                    Complete all lessons in a pathway, pass the assessment quiz (≥70%), and submit your practical applied project to unlock verifiable professional certificates.
-                  </p>
-                  <button
-                    onClick={() => navigate('/pathways')}
-                    className="mt-3 text-xs font-bold text-forest-green hover:underline"
-                  >
-                    View Pathway Milestones →
-                  </button>
+                  {user && !user.name?.trim() && overallCoursePercent === 100 ? (
+                    <Link to="/profile" className="text-xs font-bold text-forest-green hover:underline">
+                      Add your name in Profile to receive your certificate
+                    </Link>
+                  ) : (
+                    <p className="text-[11px] text-gray-500">
+                      Complete all required lessons and pass every module quiz to earn your certificate.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -582,10 +564,11 @@ export default function Dashboard() {
                           ID: {cert.id}
                         </span>
                         <h4 className="text-xs font-bold text-gray-900 mt-0.5">{cert.courseTitle}</h4>
+                        {cert.learnerName && <p className="text-xs text-gray-700">{cert.learnerName}</p>}
                         <span className="text-[10px] text-gray-500">Issued: {cert.issueDate}</span>
-                        <span className="block text-[10px] text-gray-600 mt-1">
-                          Email: {cert.emailDeliveryStatus || 'not_sent'}
-                        </span>
+                        {cert.emailDeliveryStatus === 'sent' && (
+                          <span className="block text-[10px] text-gray-600 mt-1">Sent by email</span>
+                        )}
                         {cert.emailDeliveryStatus === 'failed' && (
                           <button
                             onClick={() => void retryCertificateEmail(cert.id)}
@@ -595,18 +578,13 @@ export default function Dashboard() {
                             {retryingCertificateId === cert.id ? 'Retrying…' : 'Retry email'}
                           </button>
                         )}
-                        {cert.emailDeliveryStatus === 'blocked' && (
-                          <span className="block text-[10px] text-amber-800 mt-1">
-                            Verify an account email to receive this certificate by email.
-                          </span>
-                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           onClick={() => void downloadCertificate(cert.id)}
                           className="px-3 py-1.5 bg-forest-green text-white text-[11px] font-bold rounded-lg hover:bg-forest-green/90 transition"
                         >
-                          Download PDF
+                          {isSwahili ? 'Pakua Cheti' : 'Download Certificate'}
                         </button>
                         <Link
                           to={`/verify/${cert.id}`}

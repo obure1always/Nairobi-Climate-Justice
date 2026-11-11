@@ -95,24 +95,28 @@ const drawRiverPanel = (page: PDFPage, regular: PDFFont) => {
   });
 };
 
-const embedSignature = async (document: PDFDocument): Promise<PDFImage | undefined> => {
-  const configuredPath = process.env.CERTIFICATE_SIGNATURE_PATH;
+const embedSignature = async (document: PDFDocument, required: boolean): Promise<PDFImage | undefined> => {
+  const configuredPath = process.env.CERTIFICATE_SIGNATURE_PATH?.trim();
   if (!configuredPath) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Certificate signature image is not configured.');
-    }
+    if (required) throw new Error('Certificate signature image is not configured.');
     return undefined;
   }
 
-  const signaturePath = path.resolve(configuredPath);
-  const extension = path.extname(signaturePath).toLowerCase();
-  const bytes = await readFile(signaturePath);
-  if (extension === '.png') return document.embedPng(bytes);
-  if (extension === '.jpg' || extension === '.jpeg') return document.embedJpg(bytes);
-  throw new Error('Certificate signature image must be PNG or JPEG.');
+  try {
+    const signaturePath = path.resolve(configuredPath);
+    const extension = path.extname(signaturePath).toLowerCase();
+    const bytes = await readFile(signaturePath);
+    if (extension === '.png') return await document.embedPng(bytes);
+    if (extension === '.jpg' || extension === '.jpeg') return await document.embedJpg(bytes);
+    throw new Error('Certificate signature image must be PNG or JPEG.');
+  } catch (error) {
+    if (required) throw error;
+    console.warn('[certificate.pdf] Could not embed the configured signature image.');
+    return undefined;
+  }
 };
 
-export const createCertificatePdf = async (certificate: Certificate): Promise<Buffer> => {
+export const createCertificatePdf = async (certificate: Certificate, requireSignature = false): Promise<Buffer> => {
   const document = await PDFDocument.create();
   document.registerFontkit(fontkit);
   const certificateDate = new Date(certificate.issueDate);
@@ -132,7 +136,7 @@ export const createCertificatePdf = async (certificate: Certificate): Promise<Bu
   page.drawRectangle({ x: 0, y: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT, color: PAPER });
   drawRiverPanel(page, regular);
 
-  const signature = await embedSignature(document);
+  const signature = await embedSignature(document, requireSignature);
 
   drawCentered(page, 'NAIROBI CLIMATE JUSTICE', regular, 15, 520, GREEN);
   page.drawLine({
@@ -189,13 +193,21 @@ export const createCertificatePdf = async (certificate: Certificate): Promise<Bu
       width: dimensions.width,
       height: dimensions.height
     });
+    page.drawLine({
+      start: { x: CONTENT_LEFT, y: 78 },
+      end: { x: CONTENT_LEFT + 220, y: 78 },
+      thickness: 0.75,
+      color: GOLD
+    });
+  } else {
+    page.drawText('ISSUED BY', {
+      x: CONTENT_LEFT,
+      y: 78,
+      size: 8,
+      font: regular,
+      color: MUTED
+    });
   }
-  page.drawLine({
-    start: { x: CONTENT_LEFT, y: 78 },
-    end: { x: CONTENT_LEFT + 220, y: 78 },
-    thickness: 0.75,
-    color: GOLD
-  });
   page.drawText(certificate.instructorName, {
     x: CONTENT_LEFT,
     y: 55,

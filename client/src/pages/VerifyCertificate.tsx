@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { apiUrl } from '../lib/api';
 import { 
   ShieldCheck, 
   Award, 
@@ -11,47 +12,46 @@ import {
 
 interface VerifiedCert {
   certificateId: string;
-  studentName: string;
+  learnerName: string;
   courseTitle: string;
   issueDate: string;
   issuingOrganization: string;
-  instructorName: string;
+  instructor: string;
   instructorTitle: string;
-  skillsAcquired: string[];
-  status: string;
-  verificationUrl: string;
+  skillsVerified: string[] | null;
 }
+
+type VerificationResult =
+  | { id: string; certificate: VerifiedCert; error?: never }
+  | { id: string; error: string; certificate?: never };
 
 export default function VerifyCertificate() {
   const { certId } = useParams<{ certId: string }>();
-  const [cert, setCert] = useState<VerifiedCert | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<VerificationResult | null>(null);
+  const current = result?.id === certId ? result : null;
+  const cert = current?.certificate;
+  const error = certId ? current?.error : 'No certificate ID provided.';
+  const isLoading = Boolean(certId && !current);
 
   useEffect(() => {
-    if (!certId) {
-      setError('No certificate ID provided in verification URL.');
-      setIsLoading(false);
-      return;
-    }
+    if (!certId) return;
 
-    fetch(`/api/v1/certificates/verify/${certId}`)
+    const controller = new AbortController();
+    fetch(apiUrl(`/certificates/verify/${encodeURIComponent(certId)}`), { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || 'Certificate not found or invalid.');
+          throw new Error(err.error || 'Certificate not found or invalid.');
         }
         return res.json();
       })
       .then((data) => {
-        setCert(data);
+        if (!controller.signal.aborted) setResult({ id: certId, certificate: data });
       })
       .catch((err) => {
-        setError(err.message);
-      })
-      .finally(() => {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setResult({ id: certId, error: err.message });
       });
+    return () => controller.abort();
   }, [certId]);
 
   if (isLoading) {
@@ -103,7 +103,7 @@ export default function VerifyCertificate() {
                 Authentic & Verified Credential
               </h1>
               <p className="text-xs text-emerald-100">
-                Issued by Climate Justice Nairobi
+                Issued by {cert.issuingOrganization}
               </p>
             </div>
           </div>
@@ -130,7 +130,7 @@ export default function VerifyCertificate() {
               Climate Justice Nairobi • Professional Credential
             </span>
             <h2 className="text-3xl md:text-4xl font-serif font-black text-gray-900 tracking-tight">
-              CERTIFICATE OF DEMONSTRATED COMPETENCE
+              CERTIFICATE OF COMPLETION
             </h2>
             <div className="w-24 h-1 bg-amber-500 mx-auto mt-3 rounded-full" />
           </div>
@@ -141,10 +141,10 @@ export default function VerifyCertificate() {
               This is to certify that
             </p>
             <h3 className="text-2xl md:text-3xl font-extrabold text-[#00331e]">
-              {cert.studentName}
+              {cert.learnerName}
             </h3>
             <p className="text-xs text-gray-600 mt-2 max-w-lg mx-auto leading-relaxed">
-              has successfully satisfied all rigorous theoretical assessments, practical fieldwork analyses, and rubric criteria for:
+              has completed the requirements for
             </p>
           </div>
 
@@ -156,13 +156,13 @@ export default function VerifyCertificate() {
           </div>
 
           {/* Skills / Outcomes Grid */}
-          {cert.skillsAcquired && cert.skillsAcquired.length > 0 && (
+          {Array.isArray(cert.skillsVerified) && cert.skillsVerified.length > 0 && (
             <div className="mb-8">
               <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block text-center mb-3">
-                Verified Demonstrated Competencies:
+                Topics covered
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {cert.skillsAcquired.map((skill, i) => (
+                {cert.skillsVerified.map((skill, i) => (
                   <div key={i} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg text-xs text-gray-800">
                     <CheckCircle className="w-3.5 h-3.5 text-forest-green shrink-0" />
                     <span className="font-medium">{skill}</span>
@@ -174,14 +174,10 @@ export default function VerifyCertificate() {
 
           {/* Signatures & Seal Footer */}
           <div className="pt-8 border-t border-gray-200 grid grid-cols-1 sm:grid-cols-3 gap-6 items-end text-center">
-            {/* Founder Sign-off (Supervisor Requirement #9) */}
             <div className="text-left sm:text-left">
-              <div className="font-serif italic text-2xl text-gray-900 border-b-2 border-gray-400 pb-1 mb-1 font-bold">
-                John Obure
-              </div>
-              <p className="text-xs font-black text-gray-950">John Obure</p>
-              <p className="text-[11px] font-semibold text-emerald-800">Climate Activist and Founder</p>
-              <p className="text-[9px] text-gray-400">Climate Justice Nairobi</p>
+              <p className="text-xs font-black text-gray-950">{cert.instructor}</p>
+              <p className="text-[11px] font-semibold text-emerald-800">{cert.instructorTitle}</p>
+              <p className="text-[9px] text-gray-400">{cert.issuingOrganization}</p>
             </div>
 
             {/* Gold Verified Seal */}

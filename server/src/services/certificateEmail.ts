@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import { Certificate, CertificateDelivery, User } from '../models/index';
 import { createCertificatePdf } from './certificatePdf';
+import { restoreCertificateLearnerName } from './courseProgress';
 
 type CertificateEmailSender = (
   recipient: string,
@@ -96,7 +97,10 @@ export const attemptCertificateEmail = async (
 
     delivery.recipientEmail = user.email;
     await delivery.save();
-    const pdf = await createCertificatePdf(certificate);
+    if (!await restoreCertificateLearnerName(certificate, user.name)) {
+      throw new Error('The learner must add their name to the certificate.');
+    }
+    const pdf = await createCertificatePdf(certificate, process.env.NODE_ENV === 'production');
     await sender(user.email, certificate, pdf);
     await delivery.update({
       status: 'sent',

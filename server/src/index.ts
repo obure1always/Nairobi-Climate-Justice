@@ -50,9 +50,11 @@ import {
 } from './services/learningService';
 import {
   COURSE_ID,
+  certificateLearnerName,
   findCourseModule,
   gradeCourseQuiz,
   issueCourseCertificateIfComplete,
+  restoreCertificateLearnerName,
   updateModuleCompletion
 } from './services/courseProgress';
 import { COURSE_MODULES } from './services/courseCatalog';
@@ -475,6 +477,7 @@ app.patch(['/api/v1/auth/profile', '/api/v1/user/profile'], requireUserAuth, asy
   try {
     const user = req.user!;
     const { name, displayName, avatarUrl, bio, title, institution, expertise } = req.body;
+    const previousCertificateName = certificateLearnerName(user.name);
 
     if (name !== undefined) user.name = name?.trim() || null;
     if (displayName !== undefined && !name) user.name = displayName?.trim() || null;
@@ -484,7 +487,14 @@ app.patch(['/api/v1/auth/profile', '/api/v1/user/profile'], requireUserAuth, asy
     if (institution !== undefined) user.institution = institution?.trim() || null;
     if (expertise !== undefined) user.expertise = expertise?.trim() || null;
 
-    await user.save();
+    if (!previousCertificateName && certificateLearnerName(user.name)) {
+      await sequelize.transaction(async transaction => {
+        await user.save({ transaction });
+        await issueCourseCertificateIfComplete(user.id, transaction);
+      });
+    } else {
+      await user.save();
+    }
 
     return res.json({
       success: true,
@@ -1438,7 +1448,9 @@ app.post('/api/v1/certificates/issue', requireUserAuth, async (req: Authenticate
     if (!certificate) {
       return res.status(409).json({
         success: false,
-        error: 'Complete every required lesson and pass every module quiz before issuing a certificate.'
+        error: certificateLearnerName(req.user!.name)
+          ? 'Complete every required lesson and pass every module quiz before issuing a certificate.'
+          : 'Add your name in Profile to receive a personalized certificate.'
       });
     }
     const delivery = await attemptCertificateEmail(certificate.id);
@@ -1454,12 +1466,13 @@ app.post('/api/v1/certificates/issue', requireUserAuth, async (req: Authenticate
 
 app.get('/api/v1/certificates/my-certificates', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const userId = req.user!.id;
+    const { id: userId, name } = req.user!;
     const certificates = await Certificate.findAll({
       where: { userId },
       order: [['issueDate', 'DESC']]
     });
     for (const certificate of certificates) {
+      if (!await restoreCertificateLearnerName(certificate, name)) continue;
       if (certificate.pathwayId === COURSE_ID) {
         await issueCourseCertificateIfComplete(userId);
       }
@@ -1473,6 +1486,7 @@ app.get('/api/v1/certificates/my-certificates', requireUserAuth, async (req: Aut
     );
     return res.json(certificates.map(certificate => ({
       ...certificate.toJSON(),
+      learnerName: certificateLearnerName(certificate.learnerName),
       emailDeliveryStatus: statusByCertificateId.get(certificate.id) || 'not_sent'
     })));
   } catch (err: any) {
@@ -1486,6 +1500,9 @@ app.get('/api/v1/certificates/:certId/pdf', requireUserAuth, async (req: Authent
       where: { id: req.params.certId, userId: req.user!.id }
     });
     if (!certificate) return res.status(404).json({ error: 'Certificate not found' });
+    if (!await restoreCertificateLearnerName(certificate, req.user!.name)) {
+      return res.status(409).json({ error: 'Add your name in Profile to download your certificate.' });
+    }
     const pdf = await createCertificatePdf(certificate);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${certificate.id}.pdf"`);
@@ -1497,7 +1514,7 @@ app.get('/api/v1/certificates/:certId/pdf', requireUserAuth, async (req: Authent
       error: error instanceof Error ? error.message : 'Unknown error'
     });
     return res.status(503).json({
-      error: 'Certificate PDF generation is unavailable. Check the private certificate signature and font assets.'
+      error: 'We could not generate your certificate PDF. Please contact support if this continues.'
     });
   }
 });
@@ -1544,6 +1561,12 @@ app.get('/api/v1/certificates/verify/:certId', async (req: Request, res: Respons
         verified: false, 
         error: 'Certificate not found or invalid certificate identifier.' 
       });
+    }
+    if (!certificateLearnerName(cert.learnerName)) {
+      const owner = await User.findByPk(cert.userId, { attributes: ['name'] });
+      if (!await restoreCertificateLearnerName(cert, owner?.name ?? null)) {
+        return res.status(409).json({ verified: false, error: 'The learner must add their name to complete this certificate.' });
+      }
     }
 
     return res.json({

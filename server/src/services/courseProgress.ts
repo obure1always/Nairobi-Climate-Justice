@@ -112,6 +112,23 @@ const ensureCertificateDelivery = async (
   return delivery;
 };
 
+export const certificateLearnerName = (name: string | null | undefined) => {
+  const trimmed = name?.trim();
+  return trimmed && trimmed !== 'Climate Justice Scholar' ? trimmed : null;
+};
+
+export const restoreCertificateLearnerName = async (
+  certificate: Certificate,
+  profileName: string | null,
+  transaction?: Transaction
+) => {
+  if (certificateLearnerName(certificate.learnerName)) return true;
+  const name = certificateLearnerName(profileName);
+  if (!name) return false;
+  await certificate.update({ learnerName: name }, { transaction });
+  return true;
+};
+
 export const issueCourseCertificateIfComplete = async (
   userId: string,
   transaction?: Transaction
@@ -124,9 +141,13 @@ export const issueCourseCertificateIfComplete = async (
     transaction
   });
   if (existing) {
+    if (!await restoreCertificateLearnerName(existing, user.name, transaction)) return null;
     await ensureCertificateDelivery(existing, user, transaction);
     return existing;
   }
+
+  const learnerName = certificateLearnerName(user.name);
+  if (!learnerName) return null;
 
   for (const module of COURSE_MODULES) {
     const completedLessons = await LessonProgress.count({
@@ -144,7 +165,7 @@ export const issueCourseCertificateIfComplete = async (
   const certificate = await Certificate.create({
     id,
     userId,
-    learnerName: user.name,
+    learnerName,
     courseTitle: COURSE_TITLE,
     pathwayId: COURSE_ID,
     issuingOrg: 'Climate Justice Nairobi',
