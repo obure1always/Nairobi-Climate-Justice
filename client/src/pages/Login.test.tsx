@@ -174,6 +174,25 @@ describe('Authentication Interface', () => {
     });
   });
 
+  it('links both registration methods to the policy without leaving the form', () => {
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('link', { name: 'Privacy Policy' }).getAttribute('href')).toBe('/privacy');
+    fireEvent.click(screen.getByRole('button', { name: 'Create Account' }));
+
+    for (const method of ['Email & Password', 'Phone & Password']) {
+      fireEvent.click(screen.getByRole('button', { name: method }));
+      const link = screen.getByRole('link', { name: /Read the Privacy Policy/ });
+      expect(link.getAttribute('href')).toBe('/privacy');
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(screen.getByRole('checkbox', { name: 'I have read the Privacy Policy.' })).toHaveProperty('required', true);
+    }
+  });
+
   it('handles language toggle click', () => {
     render(
       <MemoryRouter>

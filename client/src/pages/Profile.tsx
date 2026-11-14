@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useLanguage } from '../LanguageContext';
 import { useProgress } from '../contexts/ProgressContext';
@@ -40,6 +40,11 @@ export default function Profile() {
   const navigate = useNavigate();
   const location = useLocation();
   const isSwahili = language === 'sw';
+  const privacySettings = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (location.hash === '#privacy-settings') privacySettings.current?.focus();
+  }, [location.hash]);
 
   // Profile Edit form state
   const [displayName, setDisplayName] = useState('');
@@ -596,10 +601,25 @@ export default function Profile() {
         </section>
 
         {/* SECTION 5: DATA & PRIVACY MANAGEMENT */}
-        <section className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-4">
-          <div className="flex items-center gap-2 text-gray-900 font-bold text-base border-b border-gray-100 pb-3">
+        <section
+          id="privacy-settings"
+          ref={privacySettings}
+          tabIndex={-1}
+          aria-labelledby="privacy-settings-heading"
+          className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-4"
+        >
+          <h2 id="privacy-settings-heading" className="flex items-center gap-2 text-gray-900 font-bold text-base border-b border-gray-100 pb-3">
             <Shield className="w-5 h-5 text-forest-green" />
             <span>{isSwahili ? 'Faragha na Usimamizi wa Data' : 'Privacy & Device Management'}</span>
+          </h2>
+
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm font-semibold text-forest-green">
+            <Link to="/privacy" className="underline underline-offset-4">
+              {isSwahili ? 'Sera ya Faragha' : 'Privacy Policy'}
+            </Link>
+            <Link to="/privacy#privacy-request" className="underline underline-offset-4">
+              {isSwahili ? 'Tuma ombi kuhusu faragha' : 'Make a privacy request'}
+            </Link>
           </div>
 
           <div className="space-y-3">
@@ -753,8 +773,8 @@ export default function Profile() {
 
             <p className="text-xs sm:text-sm text-gray-600 leading-relaxed">
               {isSwahili
-                ? 'Hatua hii itafuta barua pepe yako, nenosiri, na maelezo yako ya masomo kwenye seva zetu za wingu. Ukiamua kujiandikisha tena baadaye, itabidi uanze akaunti mpya.'
-                : 'This action will permanently delete your account credentials, login sessions, and cloud-synced progress from our servers. You will be returned to Guest mode.'}
+                ? 'Hatua hii itafuta akaunti yako, vipindi vya kuingia na rekodi za maendeleo ya moduli kwenye seva. Rekodi nyingine, kama matokeo ya majaribio, vyeti na maombi ya msaada, zinaweza kubaki. Baada ya kufuta akaunti, utarudishwa kwenye ukurasa wa kuingia.'
+                : 'This deletes your account, login sessions and module progress records from the server. Other records, such as quiz results, certificates and support requests, may remain. You’ll return to the sign-in page.'}
             </p>
 
             {deleteError && (

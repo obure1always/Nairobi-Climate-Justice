@@ -16,6 +16,7 @@ import ImpactTracker from './pages/ImpactTracker';
 import VerifyCertificate from './pages/VerifyCertificate';
 import Resources from './pages/Resources';
 import Profile from './pages/Profile';
+import PrivacyPolicy from './pages/PrivacyPolicy';
 import About from './pages/About';
 import Help from './pages/Help';
 import Glossary from './pages/Glossary';
@@ -59,8 +60,9 @@ function AppRoutes() {
     <>
       <GuestTransferModal />
       <Routes>
-        {/* Public authentication and verification */}
+        {/* Public authentication, policy, and verification */}
         <Route path="/login" element={<Login />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/verify/:certId" element={<VerifyCertificate />} />
 

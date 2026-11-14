@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiUrl } from '../lib/api';
 import { useLanguage } from '../LanguageContext';
@@ -190,7 +190,7 @@ export default function Login() {
     }
 
     if (!privacyAgreed) {
-      setErrorMessage(isSwahili ? 'Lazima ukubali ilani ya faragha.' : 'Please accept the privacy notice to create an account.');
+      setErrorMessage(isSwahili ? 'Tafadhali thibitisha kuwa umesoma sera ya faragha.' : 'Please confirm that you have read the Privacy Policy.');
       return;
     }
 
@@ -239,7 +239,7 @@ export default function Login() {
     }
 
     if (!privacyAgreed) {
-      setErrorMessage(isSwahili ? 'Lazima ukubali ilani ya faragha.' : 'Please accept the privacy notice to create an account.');
+      setErrorMessage(isSwahili ? 'Tafadhali thibitisha kuwa umesoma sera ya faragha.' : 'Please confirm that you have read the Privacy Policy.');
       return;
     }
 
@@ -742,23 +742,12 @@ export default function Login() {
                   </div>
                 </div>
 
-                <div className="pt-1">
-                  <label className="flex items-start gap-2.5 text-xs text-gray-600 cursor-pointer">
-                    <input
-                      id="regEmailPrivacy"
-                      type="checkbox"
-                      checked={privacyAgreed}
-                      onChange={(e) => setPrivacyAgreed(e.target.checked)}
-                      required
-                      className="mt-0.5 rounded border-gray-300 text-forest-green focus:ring-forest-green"
-                    />
-                    <span className="leading-relaxed">
-                      {isSwahili
-                        ? 'Ninakubali ilani ya faragha na masharti ya elimu ya hali ya hewa ya jamii.'
-                        : 'I agree to the privacy notice and climate learning platform terms.'}
-                    </span>
-                  </label>
-                </div>
+                <PrivacyAcknowledgement
+                  id="regEmailPrivacy"
+                  checked={privacyAgreed}
+                  onChange={setPrivacyAgreed}
+                  isSwahili={isSwahili}
+                />
 
                 <button
                   type="submit"
@@ -901,23 +890,12 @@ export default function Login() {
                   </span>
                 </div>
 
-                <div className="pt-1">
-                  <label className="flex items-start gap-2.5 text-xs text-gray-600 cursor-pointer">
-                    <input
-                      id="regPhonePrivacy"
-                      type="checkbox"
-                      checked={privacyAgreed}
-                      onChange={(e) => setPrivacyAgreed(e.target.checked)}
-                      required
-                      className="mt-0.5 rounded border-gray-300 text-forest-green focus:ring-forest-green"
-                    />
-                    <span className="leading-relaxed">
-                      {isSwahili
-                        ? 'Ninakubali ilani ya faragha na masharti ya elimu ya hali ya hewa ya jamii.'
-                        : 'I agree to the privacy notice and climate learning platform terms.'}
-                    </span>
-                  </label>
-                </div>
+                <PrivacyAcknowledgement
+                  id="regPhonePrivacy"
+                  checked={privacyAgreed}
+                  onChange={setPrivacyAgreed}
+                  isSwahili={isSwahili}
+                />
 
                 <button
                   type="submit"
@@ -1150,9 +1128,43 @@ export default function Login() {
       )}
 
       {/* Footer */}
-      <footer className="text-center text-xs text-gray-400 py-3">
-        Climate Justice Nairobi &bull; Independent Climate Education
+      <footer className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 py-3 text-xs text-gray-600">
+        <span>Climate Justice Nairobi &bull; Independent Climate Education</span>
+        <Link to="/privacy" className="font-semibold text-forest-green underline underline-offset-4">
+          {isSwahili ? 'Sera ya Faragha' : 'Privacy Policy'}
+        </Link>
       </footer>
+    </div>
+  );
+}
+
+function PrivacyAcknowledgement({ id, checked, onChange, isSwahili }: {
+  id: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  isSwahili: boolean;
+}) {
+  return (
+    <div className="space-y-2 pt-1 text-xs leading-relaxed text-gray-700">
+      <Link
+        to={isSwahili ? '/privacy?lang=sw' : '/privacy'}
+        target="_blank"
+        rel="noopener"
+        className="font-semibold text-forest-green underline underline-offset-4"
+      >
+        {isSwahili ? 'Soma Sera ya Faragha (kichupo kipya)' : 'Read the Privacy Policy (opens in a new tab)'}
+      </Link>
+      <label htmlFor={id} className="flex cursor-pointer items-start gap-2.5">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={event => onChange(event.target.checked)}
+          required
+          className="mt-0.5 rounded border-gray-300 text-forest-green focus:ring-forest-green"
+        />
+        {isSwahili ? 'Nimesoma Sera ya Faragha.' : 'I have read the Privacy Policy.'}
+      </label>
     </div>
   );
 }
