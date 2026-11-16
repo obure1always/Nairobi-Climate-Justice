@@ -62,7 +62,7 @@ import {
 import { COURSE_MODULES } from './services/courseCatalog';
 import { createCertificatePdf } from './services/certificatePdf';
 import { attemptCertificateEmail, attemptPendingCertificateEmails } from './services/certificateEmail';
-import { exportCourseUsabilityCsv, parseUsabilitySubmission } from './services/courseUsability';
+import { exportCourseUsabilityCsv, exportCourseUsabilityWorkbook, parseUsabilitySubmission } from './services/courseUsability';
 
 const app = express();
 app.use(cors());
@@ -891,6 +891,12 @@ app.get('/api/v1/admin/export/sus', requireRoles(['admin']), async (_req, res) =
   const csv = await exportCourseUsabilityCsv();
   res.set('Cache-Control', 'no-store');
   res.attachment('nairobi-climate-justice-sus.csv').type('text/csv').send(csv);
+});
+
+app.get('/api/v1/admin/export/sus.xlsx', requireRoles(['admin']), async (_req, res) => {
+  const workbook = await exportCourseUsabilityWorkbook();
+  res.set('Cache-Control', 'no-store');
+  res.attachment('nairobi-climate-justice-sus.xlsx').send(workbook);
 });
 
 // Research export requires the same administrator role as the dashboard.

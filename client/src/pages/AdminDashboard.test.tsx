@@ -186,7 +186,7 @@ describe('AdminDashboard Component', () => {
     expect(screen.getByText(/Administrator Access Restricted/i)).toBeDefined();
     expect(screen.getByText(/requires verified platform administrator credentials/i)).toBeDefined();
     expect(screen.queryByText(/Administrator Command Console/i)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Export SUS CSV' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export SUS to Excel' })).toBeNull();
   });
 
   it('renders administration dashboard for authenticated administrator', async () => {
@@ -222,7 +222,7 @@ describe('AdminDashboard Component', () => {
 
     // Header and SQLite connection info
     expect(screen.getByText(/Administrator Command Console/i)).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Export SUS CSV' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export SUS to Excel' })).toBeTruthy();
 
     // Verify metric cards
     await waitFor(() => {

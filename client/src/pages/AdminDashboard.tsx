@@ -279,22 +279,23 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDownloadSusCsv = async () => {
+  const handleDownloadSusExcel = async () => {
     if (!token || isExportingSus) return;
     setIsExportingSus(true);
     setSusExportError(null);
     try {
-      const response = await fetch(apiUrl('/admin/export/sus'), {
+      const response = await fetch(apiUrl('/admin/export/sus.xlsx'), {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store'
       });
-      if (!response.ok || !response.headers.get('Content-Type')?.startsWith('text/csv')) {
+      const workbookType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      if (!response.ok || !response.headers.get('Content-Type')?.startsWith(workbookType)) {
         throw new Error('The SUS export could not be downloaded');
       }
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'nairobi-climate-justice-sus.csv';
+      link.download = 'nairobi-climate-justice-sus.xlsx';
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -403,12 +404,12 @@ export default function AdminDashboard() {
 
               <button
                 type="button"
-                onClick={handleDownloadSusCsv}
+                onClick={handleDownloadSusExcel}
                 disabled={isExportingSus || !token}
                 className="px-3.5 py-2 bg-white border border-gray-200 hover:border-forest-green hover:bg-gray-50 text-gray-700 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5 text-forest-green" />
-                <span>{isExportingSus ? 'Exporting…' : 'Export SUS CSV'}</span>
+                <span>{isExportingSus ? 'Exporting…' : 'Export SUS to Excel'}</span>
               </button>
             </div>
           </div>

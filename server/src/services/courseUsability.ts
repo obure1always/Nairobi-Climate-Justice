@@ -1,4 +1,5 @@
 import { CourseUsabilityResponse } from '../models/index';
+import writeExcelFile, { type SheetData } from 'write-excel-file/node';
 
 const QUESTION_COUNT = 10;
 const COMMENT_LIMIT = 1000;
@@ -38,11 +39,15 @@ function quoteCsv(value: string | number) {
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
-export async function exportCourseUsabilityCsv() {
-  const responses = await CourseUsabilityResponse.findAll({
+function getCourseUsabilityResponses() {
+  return CourseUsabilityResponse.findAll({
     attributes: ['studyCode', 'createdAt', 'language', 'answers', 'comment'],
     order: [['createdAt', 'ASC']]
   });
+}
+
+export async function exportCourseUsabilityCsv() {
+  const responses = await getCourseUsabilityResponses();
   const questionColumns = Array.from({ length: QUESTION_COUNT }, (_, index) => `sus${index + 1}`);
   const header = ['study_code', 'submitted_at', 'language', ...questionColumns, 'sus_score', 'comment'];
   const rows = responses.map(response => [
@@ -54,4 +59,28 @@ export async function exportCourseUsabilityCsv() {
     response.comment ?? ''
   ].map(quoteCsv).join(','));
   return [header.join(','), ...rows].join('\r\n') + '\r\n';
+}
+
+export async function exportCourseUsabilityWorkbook() {
+  const responses = await getCourseUsabilityResponses();
+  const questions = Array.from({ length: QUESTION_COUNT }, (_, index) => `SUS ${index + 1}`);
+  const header = ['Study code', 'Submitted at (UTC)', 'Language', ...questions, 'SUS score', 'Comment'];
+  const data: SheetData = [header.map(value => ({ value, fontWeight: 'bold' }))];
+  for (const response of responses) {
+    data.push([
+      response.studyCode,
+      response.createdAt,
+      response.language,
+      ...response.answers,
+      scoreSus(response.answers),
+      response.comment === null ? null : { value: response.comment, type: String, wrap: true }
+    ]);
+  }
+  const widths = [38, 25, 12, ...questions.map(() => 8), 14, 64];
+  return writeExcelFile(data, {
+    sheet: 'Course feedback',
+    columns: widths.map(width => ({ width })),
+    stickyRowsCount: 1,
+    dateFormat: 'yyyy-mm-dd hh:mm:ss'
+  }).toBuffer();
 }

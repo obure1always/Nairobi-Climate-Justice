@@ -6,6 +6,7 @@ import { COURSE_MODULES } from '../src/services/courseCatalog';
 
 const surveyEndpoint = '/api/v1/assessments/sus';
 const exportEndpoint = '/api/v1/admin/export/sus';
+const workbookEndpoint = '/api/v1/admin/export/sus.xlsx';
 const answers = [4, 2, 4, 2, 4, 2, 4, 2, 4, 2];
 const submission = { answers, language: 'sw', comment: '  Mafunzo yalikuwa wazi.  ' };
 
@@ -31,6 +32,8 @@ describe('Course usability survey', () => {
     await request(app).post(surveyEndpoint).send(submission).expect(401);
     await request(app).get(exportEndpoint).expect(401);
     await request(app).get(exportEndpoint).set('Authorization', otherLearnerAuth).expect(403);
+    await request(app).get(workbookEndpoint).expect(401);
+    await request(app).get(workbookEndpoint).set('Authorization', otherLearnerAuth).expect(403);
     await request(app).get(surveyEndpoint).set('Authorization', otherLearnerAuth).expect(200, { status: 'locked' });
     await request(app).post(surveyEndpoint).set('Authorization', otherLearnerAuth).send(submission).expect(403);
   });
@@ -76,5 +79,19 @@ describe('Course usability survey', () => {
       `"${response.studyCode}","${response.createdAt.toISOString()}","sw","4","2","4","2","4","2","4","2","4","2","75","Mafunzo yalikuwa wazi."\r\n`
     );
     expect(csv.text).not.toContain(learnerId);
+
+    const workbook = await request(app).get(workbookEndpoint).set('Authorization', adminAuth)
+      .buffer(true)
+      .parse((stream, done) => {
+        const chunks: Buffer[] = [];
+        stream.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        stream.on('end', () => done(null, Buffer.concat(chunks)));
+        stream.on('error', done);
+      })
+      .expect(200)
+      .expect('Cache-Control', 'no-store')
+      .expect('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .expect('Content-Disposition', 'attachment; filename="nairobi-climate-justice-sus.xlsx"');
+    expect(workbook.body.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   });
 });
