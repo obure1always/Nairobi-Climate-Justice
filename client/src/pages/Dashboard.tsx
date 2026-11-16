@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { modules } from '../data/modules';
 import { apiUrl } from '../lib/api';
 import { downloadCertificatePdf } from '../lib/certificates';
+import { CourseUsabilityInvite } from '../components/CourseUsability';
 import { 
   Play, 
   Award, 
@@ -604,6 +605,7 @@ export default function Dashboard() {
                   )}
                 </div>
               )}
+              <CourseUsabilityInvite className="mt-4 w-full text-sm" />
             </div>
 
             <section className="bg-white rounded-3xl p-6 border border-gray-200/80 shadow-sm">

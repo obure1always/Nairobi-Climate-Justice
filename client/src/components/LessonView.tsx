@@ -38,6 +38,7 @@ import {
   X
 } from 'lucide-react';
 import { QuizEngine } from './QuizEngine';
+import { CourseUsabilityInvite } from './CourseUsability';
 import MarkdownRenderer from './MarkdownRenderer';
 import { generateComprehensiveStudyNotes } from '../lib/studyNotes';
 import { downloadStudyNotesPdf } from '../lib/pdfDocuments';
@@ -1804,6 +1805,7 @@ export default function LessonView() {
               {certificateDownloadError && (
                 <p role="alert" className="text-sm text-red-700">{certificateDownloadError}</p>
               )}
+              {quizResult.status === 'saved' && quizResult.passed && <CourseUsabilityInvite className="w-full" />}
               <button 
                 onClick={() => navigate('/learn')}
                 className="w-full bg-forest-green text-white py-3.5 rounded-full font-bold hover:bg-forest-green/90 transition shadow-natural"

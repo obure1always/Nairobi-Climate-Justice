@@ -5,10 +5,17 @@ import { useProgress } from '../contexts/ProgressContext';
 import { assessments } from '../data/assessments';
 import { SyncService } from '../SyncService';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Trophy, CheckCircle, ArrowRight, ClipboardCheck, Sparkles, Sliders } from 'lucide-react';
+import { Trophy, CheckCircle, ArrowRight, ClipboardCheck, Sparkles } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { CourseUsabilitySurvey } from './CourseUsability';
 
 export default function AssessmentView() {
+  const [searchParams] = useSearchParams();
+  if (searchParams.get('type') === 'sus') return <CourseUsabilitySurvey />;
+  return <LearningAssessmentView />;
+}
+
+function LearningAssessmentView() {
   const { language } = useLanguage();
   const { unlockAchievement } = useProgress();
   const navigate = useNavigate();
@@ -16,8 +23,7 @@ export default function AssessmentView() {
   const isSwahili = language === 'sw';
   
   const rawType = searchParams.get('type');
-  const currentType: 'baseline' | 'endline' | 'sus' = 
-    rawType === 'baseline' || rawType === 'sus' ? rawType : 'endline';
+  const currentType = rawType === 'baseline' ? 'baseline' : 'endline';
 
   const assessmentData = assessments[language][currentType] || assessments[language].endline;
   
@@ -27,7 +33,7 @@ export default function AssessmentView() {
 
   const currentQuestion = assessmentData.questions[currentIndex] || assessmentData.questions[0];
 
-  const handleSelectType = (newType: 'baseline' | 'endline' | 'sus') => {
+  const handleSelectType = (newType: 'baseline' | 'endline') => {
     setSearchParams({ type: newType });
     setViewState('intro');
     setCurrentIndex(0);
@@ -80,19 +86,6 @@ export default function AssessmentView() {
         >
           <Sparkles className="w-3.5 h-3.5" />
           <span>{isSwahili ? '2. Tathmini ya Mwisho (Endline)' : '2. Endline Assessment'}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectType('sus')}
-          className={cn(
-            "px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer",
-            currentType === 'sus'
-              ? "bg-forest-green text-white shadow-sm"
-              : "bg-white text-gray-700 hover:bg-gray-100 border border-gray-200"
-          )}
-        >
-          <Sliders className="w-3.5 h-3.5" />
-          <span>{isSwahili ? '3. Utumiaji (SUS Scale)' : '3. Usability (SUS Scale)'}</span>
         </button>
       </div>
 

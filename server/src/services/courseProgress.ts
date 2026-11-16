@@ -129,6 +129,23 @@ export const restoreCertificateLearnerName = async (
   return true;
 };
 
+export const hasCompletedCourse = async (userId: string, transaction?: Transaction) => {
+  for (const module of COURSE_MODULES) {
+    const completedLessons = await LessonProgress.count({
+      where: { userId, moduleId: module.id, completed: true },
+      transaction
+    });
+    if (completedLessons < module.lessons.length) return false;
+
+    const passedQuiz = await QuizSubmission.count({
+      where: { userId, moduleId: module.id, passed: true },
+      transaction
+    });
+    if (passedQuiz === 0) return false;
+  }
+  return true;
+};
+
 export const issueCourseCertificateIfComplete = async (
   userId: string,
   transaction?: Transaction
@@ -147,19 +164,7 @@ export const issueCourseCertificateIfComplete = async (
   }
 
   const learnerName = certificateLearnerName(user.name);
-  if (!learnerName) return null;
-
-  for (const module of COURSE_MODULES) {
-    const completedLessons = await LessonProgress.count({
-      where: { userId, moduleId: module.id, completed: true },
-      transaction
-    });
-    const passedQuiz = await QuizSubmission.count({
-      where: { userId, moduleId: module.id, passed: true },
-      transaction
-    });
-    if (completedLessons < module.lessons.length || passedQuiz === 0) return null;
-  }
+  if (!learnerName || !await hasCompletedCourse(userId, transaction)) return null;
 
   const id = `CJN-${new Date().getUTCFullYear()}-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
   const certificate = await Certificate.create({

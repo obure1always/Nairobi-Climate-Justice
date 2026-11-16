@@ -153,6 +153,8 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [isExportingSus, setIsExportingSus] = useState(false);
+  const [susExportError, setSusExportError] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -277,6 +279,33 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleDownloadSusCsv = async () => {
+    if (!token || isExportingSus) return;
+    setIsExportingSus(true);
+    setSusExportError(null);
+    try {
+      const response = await fetch(apiUrl('/admin/export/sus'), {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store'
+      });
+      if (!response.ok || !response.headers.get('Content-Type')?.startsWith('text/csv')) {
+        throw new Error('The SUS export could not be downloaded');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'nairobi-climate-justice-sus.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setSusExportError('The SUS export could not be downloaded. Please try again.');
+    } finally {
+      setIsExportingSus(false);
+    }
+  };
+
   // Filtered Users
   const filteredUsers = useMemo(() => {
     if (!data?.users) return [];
@@ -371,8 +400,19 @@ export default function AdminDashboard() {
                 <Download className="w-3.5 h-3.5 text-purple-700" />
                 <span>Export Audit JSON</span>
               </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadSusCsv}
+                disabled={isExportingSus || !token}
+                className="px-3.5 py-2 bg-white border border-gray-200 hover:border-forest-green hover:bg-gray-50 text-gray-700 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5 text-forest-green" />
+                <span>{isExportingSus ? 'Exporting…' : 'Export SUS CSV'}</span>
+              </button>
             </div>
           </div>
+          {susExportError && <p role="alert" className="mt-3 text-sm text-red-700">{susExportError}</p>}
         </div>
       </header>
 

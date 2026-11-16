@@ -171,6 +171,28 @@ User.init({
   participantId: { type: DataTypes.STRING, allowNull: true },
 }, { sequelize, modelName: 'user' });
 
+export class CourseUsabilityResponse extends Model {
+  declare userId: string;
+  declare studyCode: string;
+  declare language: 'en' | 'sw';
+  declare answers: number[];
+  declare comment: string | null;
+  declare createdAt: Date;
+}
+CourseUsabilityResponse.init({
+  userId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    primaryKey: true,
+    references: { model: User, key: 'id' },
+    onDelete: 'CASCADE'
+  },
+  studyCode: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, allowNull: false, unique: true },
+  language: { type: DataTypes.STRING, allowNull: false },
+  answers: { type: DataTypes.JSON, allowNull: false },
+  comment: { type: DataTypes.TEXT, allowNull: true }
+}, { sequelize, modelName: 'course_usability_response', updatedAt: false });
+
 export class PhoneVerification extends Model {
   declare id: string;
   declare phone: string;

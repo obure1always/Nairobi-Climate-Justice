@@ -11,6 +11,7 @@ import {
   ModuleProgress, 
   SyncRecord, 
   AssessmentResponse, 
+  CourseUsabilityResponse,
   User, 
   UserSession,
   PhoneVerification,
@@ -53,6 +54,7 @@ import {
   certificateLearnerName,
   findCourseModule,
   gradeCourseQuiz,
+  hasCompletedCourse,
   issueCourseCertificateIfComplete,
   restoreCertificateLearnerName,
   updateModuleCompletion
@@ -60,6 +62,7 @@ import {
 import { COURSE_MODULES } from './services/courseCatalog';
 import { createCertificatePdf } from './services/certificatePdf';
 import { attemptCertificateEmail, attemptPendingCertificateEmails } from './services/certificateEmail';
+import { exportCourseUsabilityCsv, parseUsabilitySubmission } from './services/courseUsability';
 
 const app = express();
 app.use(cors());
@@ -850,6 +853,44 @@ app.post('/api/v1/sync', requireUserAuth, async (req: AuthenticatedRequest, res:
     }
   }
   res.json({ processedIds, failedIds });
+});
+
+app.get('/api/v1/assessments/sus', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user!.id;
+  res.set('Cache-Control', 'no-store');
+  if (await CourseUsabilityResponse.findByPk(userId)) {
+    return res.json({ status: 'submitted' });
+  }
+  return res.json({ status: await hasCompletedCourse(userId) ? 'available' : 'locked' });
+});
+
+app.post('/api/v1/assessments/sus', requireUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user!.id;
+  res.set('Cache-Control', 'no-store');
+  if (await CourseUsabilityResponse.findByPk(userId)) {
+    return res.json({ status: 'submitted' });
+  }
+
+  const submission = parseUsabilitySubmission(req.body);
+  if (!submission) {
+    return res.status(400).json({ error: 'Submit all ten ratings as integers from 1 to 5, a supported language and an optional comment up to 1000 characters.' });
+  }
+  if (!await hasCompletedCourse(userId)) {
+    return res.status(403).json({ error: 'Complete the required lessons and quizzes before submitting feedback.' });
+  }
+
+  // The primary key keeps simultaneous submissions and network retries from creating a second response.
+  await CourseUsabilityResponse.bulkCreate([{ userId, ...submission }], { ignoreDuplicates: true });
+  if (!await CourseUsabilityResponse.findByPk(userId)) {
+    throw new Error('Course usability response was not saved');
+  }
+  return res.json({ status: 'submitted' });
+});
+
+app.get('/api/v1/admin/export/sus', requireRoles(['admin']), async (_req, res) => {
+  const csv = await exportCourseUsabilityCsv();
+  res.set('Cache-Control', 'no-store');
+  res.attachment('nairobi-climate-justice-sus.csv').type('text/csv').send(csv);
 });
 
 // Research export requires the same administrator role as the dashboard.

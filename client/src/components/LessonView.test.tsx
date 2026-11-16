@@ -9,7 +9,7 @@ import LessonView from './LessonView';
 vi.mock('../LanguageContext', () => ({ useLanguage: () => ({ language: 'en' }) }));
 vi.mock('../contexts/AuthContext', () => {
   const user = { id: 'learner', name: 'Test Learner' };
-  return { useAuth: () => ({ user }) };
+  return { useAuth: () => ({ user, token: localStorage.getItem('climate_justice_token') }) };
 });
 vi.mock('../contexts/ProgressContext', () => ({ useProgress: vi.fn() }));
 vi.mock('../SyncService', () => ({
@@ -110,15 +110,18 @@ describe('Module quizzes and lesson text', () => {
     localStorage.setItem('climate_justice_token', 'test-token');
     let respond!: (response: Response) => void;
     const submission = new Promise<Response>(resolve => { respond = resolve; });
-    vi.mocked(fetch).mockImplementation(async input => String(input).endsWith('/assessments/submit')
-      ? submission
-      : Response.json([]));
+    vi.mocked(fetch).mockImplementation(async input => {
+      if (String(input).endsWith('/assessments/submit')) return submission;
+      if (String(input).endsWith('/assessments/sus')) return Response.json({ status: 'available' });
+      return Response.json([]);
+    });
 
     await finishQuiz();
     const heading = await screen.findByRole('heading', { name: 'Quiz Results' });
     expect(document.activeElement).toBe(heading);
     expect(screen.getByText('100%', { exact: true })).toBeTruthy();
     expect(screen.getByRole('status').textContent).toBe('Saving your attempt…');
+    expect(screen.queryByRole('link', { name: 'Share feedback (optional)' })).toBeNull();
     expect(useProgress().completeModule).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -127,6 +130,7 @@ describe('Module quizzes and lesson text', () => {
     expect(screen.getByRole('status').textContent).toBe('You passed the quiz.');
     expect(screen.getByText('75%', { exact: true })).toBeTruthy();
     expect(useProgress().completeModule).toHaveBeenCalledWith(courseModule.id);
+    expect(await screen.findByRole('link', { name: 'Share feedback (optional)' })).toBeTruthy();
   });
 
   it('keeps the result visible after a failed save, retries the same attempt, and confirms it after sync', async () => {
