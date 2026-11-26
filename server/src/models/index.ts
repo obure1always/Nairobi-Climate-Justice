@@ -193,6 +193,55 @@ CourseUsabilityResponse.init({
   comment: { type: DataTypes.TEXT, allowNull: true }
 }, { sequelize, modelName: 'course_usability_response', updatedAt: false });
 
+// Separate, versioned outcome measurements: never reinterpret legacy assessment or SUS rows.
+export class LearningOutcomeResponse extends Model {
+  declare id: string;
+  declare userId: string;
+  declare studyCode: string;
+  declare instrumentVersion: string;
+  declare phase: 'baseline' | 'endline';
+  declare language: 'en' | 'sw';
+  declare clientSubmissionId: string;
+  declare consentedAt: Date;
+  declare knowledge: Record<string, number>;
+  declare confidence: number[];
+  declare intention: number;
+  declare recalledConfidence: number[] | null;
+  declare recalledIntention: number | null;
+  declare comment: string | null;
+  declare knowledgeCorrect: number;
+  declare knowledgePercent: number;
+  declare justicePercent: number;
+  declare confidenceMean: number;
+  declare createdAt: Date;
+}
+LearningOutcomeResponse.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  userId: { type: DataTypes.UUID, allowNull: false, references: { model: User, key: 'id' }, onDelete: 'CASCADE' },
+  studyCode: { type: DataTypes.STRING, allowNull: false },
+  instrumentVersion: { type: DataTypes.STRING, allowNull: false },
+  phase: { type: DataTypes.STRING, allowNull: false },
+  language: { type: DataTypes.STRING, allowNull: false },
+  clientSubmissionId: { type: DataTypes.UUID, allowNull: false },
+  consentedAt: { type: DataTypes.DATE, allowNull: false },
+  knowledge: { type: DataTypes.JSON, allowNull: false },
+  confidence: { type: DataTypes.JSON, allowNull: false },
+  intention: { type: DataTypes.INTEGER, allowNull: false },
+  recalledConfidence: { type: DataTypes.JSON, allowNull: true },
+  recalledIntention: { type: DataTypes.INTEGER, allowNull: true },
+  comment: { type: DataTypes.TEXT, allowNull: true },
+  knowledgeCorrect: { type: DataTypes.INTEGER, allowNull: false },
+  knowledgePercent: { type: DataTypes.FLOAT, allowNull: false },
+  justicePercent: { type: DataTypes.FLOAT, allowNull: false },
+  confidenceMean: { type: DataTypes.FLOAT, allowNull: false }
+}, {
+  sequelize, modelName: 'learning_outcome_response', updatedAt: false,
+  indexes: [
+    { unique: true, fields: ['userId', 'instrumentVersion', 'phase'] },
+    { unique: true, fields: ['userId', 'clientSubmissionId'] }
+  ]
+});
+
 export class PhoneVerification extends Model {
   declare id: string;
   declare phone: string;

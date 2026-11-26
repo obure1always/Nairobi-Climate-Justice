@@ -63,6 +63,7 @@ import { COURSE_MODULES } from './services/courseCatalog';
 import { createCertificatePdf } from './services/certificatePdf';
 import { attemptCertificateEmail, attemptPendingCertificateEmails } from './services/certificateEmail';
 import { exportCourseUsabilityCsv, exportCourseUsabilityWorkbook, parseUsabilitySubmission } from './services/courseUsability';
+import { registerLearningOutcomeRoutes } from './routes/learningOutcomes';
 
 const app = express();
 app.use(cors());
@@ -127,6 +128,8 @@ const requireRoles = (allowedRoles: string[]) => {
 };
 
 // Health and Root Endpoint (No hardcoded credentials exposed)
+registerLearningOutcomeRoutes(app, requireUserAuth, requireRoles(['admin']));
+
 app.get('/', (_req: Request, res: Response) => {
   if (clientDistPath) {
     const indexPath = path.join(clientDistPath, 'index.html');
