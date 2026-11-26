@@ -30,6 +30,7 @@ import LessonView from './components/LessonView';
 import AssessmentView from './components/AssessmentView';
 import Onboarding from './components/Onboarding';
 import { GuestTransferModal } from './components/GuestTransferModal';
+import LearningOutcomesSurvey from './components/LearningOutcomes';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { settings, isLoading } = useProgress();
@@ -102,6 +103,7 @@ function AppRoutes() {
           
           {/* Evaluation Assessment Route */}
           <Route path="/assessment" element={<AssessmentView />} />
+          <Route path="/learning-survey" element={<LearningOutcomesSurvey />} />
         </Route>
         
         <Route path="*" element={<Navigate to="/" replace />} />

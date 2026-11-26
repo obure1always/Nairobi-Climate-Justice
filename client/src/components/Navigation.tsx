@@ -39,6 +39,7 @@ export const Navigation: React.FC = () => {
     { to: '/', icon: LayoutDashboard, label: isSwahili ? 'Dashibodi' : 'Dashboard' },
     { to: '/pathways', icon: Compass, label: isSwahili ? 'Njia za Masomo (6)' : 'Pathways (6)' },
     { to: '/learn', icon: BookOpen, label: isSwahili ? 'Mtaala wa Moduli' : 'Curriculum' },
+    { to: '/learning-survey', icon: ClipboardCheck, label: isSwahili ? 'Utafiti wa Mafunzo' : 'Learning Survey' },
     { to: '/projects', icon: FileCheck, label: isSwahili ? 'Miradi ya Vitendo' : 'Applied Projects', badge: 'Rubric' },
     { to: '/climate-data', icon: Database, label: isSwahili ? 'Data ya Tabianchi' : 'Climate Data & Maps' },
     { to: '/case-studies', icon: Globe2, label: isSwahili ? 'Mifano ya Kenya' : 'Kenyan Case Studies' },
@@ -209,6 +210,7 @@ export const Navigation: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2.5 pt-1">
               {[
+                { to: '/learning-survey', icon: ClipboardCheck, label: isSwahili ? 'Utafiti wa Mafunzo' : 'Learning Survey', color: 'text-emerald-700 bg-emerald-50' },
                 { to: '/climate-data', icon: Database, label: isSwahili ? 'Data na Ramani' : 'Climate Maps', color: 'text-teal-600 bg-teal-50' },
                 { to: '/case-studies', icon: Globe2, label: isSwahili ? 'Mifano ya Kenya' : 'Kenyan Cases', color: 'text-emerald-700 bg-emerald-50' },
                 { to: '/scenarios', icon: Compass, label: isSwahili ? 'Matukio (14)' : 'Scenarios (14)', color: 'text-amber-600 bg-amber-50' },

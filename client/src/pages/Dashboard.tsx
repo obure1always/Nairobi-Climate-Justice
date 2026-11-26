@@ -7,6 +7,7 @@ import { modules } from '../data/modules';
 import { apiUrl } from '../lib/api';
 import { downloadCertificatePdf } from '../lib/certificates';
 import { CourseUsabilityInvite } from '../components/CourseUsability';
+import { LearningOutcomesInvite } from '../components/LearningOutcomes';
 import { 
   Play, 
   Award, 
@@ -250,6 +251,8 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        <LearningOutcomesInvite />
 
         {/* 4 Stat Badges (Matching Supervisor Screenshot Page 1) */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">

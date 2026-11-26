@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiUrl } from '../lib/api';
 import AdminSupportInbox from '../components/AdminSupportInbox';
+import AdminLearningOutcomes from '../components/AdminLearningOutcomes';
 import { 
   ShieldAlert, 
   ShieldCheck, 
@@ -148,7 +149,7 @@ export default function AdminDashboard() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'support' | 'courses' | 'progress' | 'assessments' | 'certificates' | 'activity'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'support' | 'outcomes' | 'courses' | 'progress' | 'assessments' | 'certificates' | 'activity'>('users');
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -440,7 +441,7 @@ export default function AdminDashboard() {
                 Connected Database: <span className="font-mono text-forest-green font-semibold">{data?.database.storage || 'Loading...'}</span>
               </p>
               <p className="text-[11px] text-gray-500">
-                In-process SQLite 3 relational storage • 21 schema tables • Sequelize ORM active
+                In-process SQLite 3 relational storage • {data?.database.tableCount ?? '…'} schema tables • Sequelize ORM active
               </p>
             </div>
           </div>
@@ -528,6 +529,11 @@ export default function AdminDashboard() {
               Applied submissions
             </div>
           </div>
+        </div>
+
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-4">
+          <div><h2 className="font-bold text-gray-900">Learning survey results</h2><p className="mt-1 text-sm text-gray-600">View changes in knowledge and confidence. Export Excel or a presentation summary.</p></div>
+          <button type="button" onClick={() => setActiveTab('outcomes')} className="min-h-11 rounded-xl border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50">View learning results</button>
         </div>
 
         {/* Tab Navigation */}
@@ -622,6 +628,10 @@ export default function AdminDashboard() {
             <span>Live Activity Feed</span>
           </button>
         </div>
+
+        {activeTab === 'outcomes' && user?.role === 'admin' && token && (
+          <AdminLearningOutcomes key={user.id} token={token} />
+        )}
 
         {activeTab === 'support' && user?.role === 'admin' && token && (
           <AdminSupportInbox key={user.id} token={token} />

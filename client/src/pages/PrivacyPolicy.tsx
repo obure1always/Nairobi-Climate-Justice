@@ -85,6 +85,7 @@ const sections = [
       paragraphs: [
         'If you’re under 18, ask a parent or guardian to contact us before creating an account or sharing personal information. The current sign-up form has no age check or way to record guardian permission.',
         'Research participation is voluntary and requires separate consent. If invited, you’ll receive information about the study and, where required, your parent or guardian will be asked for permission.',
+        'The optional Learning Survey records climate knowledge answers, confidence and intention ratings, language, consent and submission times under your account. This allows before-course and after-course responses to be matched. Authorised administrators can view summaries and export coded responses for educational evaluation. Recalled ratings are identified separately. The survey does not affect grades or certificates. Draft answers are kept in this browser under your account until submitted or withdrawn. You can withdraw saved survey responses from the survey page. Previously exported copies may remain; contact us about those copies.',
       ],
     },
     sw: {
@@ -92,6 +93,7 @@ const sections = [
       paragraphs: [
         'Ikiwa una umri wa chini ya miaka 18, mwombe mzazi au mlezi awasiliane nasi kabla hujafungua akaunti au kutoa taarifa binafsi. Fomu ya sasa ya usajili haihakiki umri wala kurekodi idhini ya mzazi au mlezi.',
         'Kushiriki katika utafiti ni kwa hiari na kunahitaji idhini tofauti. Ukialikwa kushiriki, utapokea maelezo kuhusu utafiti. Inapohitajika, mzazi au mlezi wako ataombwa kutoa idhini.',
+        'Utafiti wa Mafunzo wa hiari huhifadhi majibu ya maarifa ya tabianchi, viwango vya ujasiri na nia, lugha, idhini na nyakati za kuwasilisha chini ya akaunti yako. Hii hutuwezesha kulinganisha majibu ya kabla na baada ya kozi. Wasimamizi walioidhinishwa wanaweza kuona muhtasari na kupakua majibu yenye misimbo kwa tathmini ya elimu. Viwango vinavyokumbukwa huonyeshwa tofauti. Utafiti hauathiri alama au vyeti. Rasimu huhifadhiwa kwenye kivinjari chini ya akaunti yako hadi ziwasilishwe au ziondolewe. Unaweza kuondoa majibu yaliyohifadhiwa kwenye ukurasa wa utafiti. Nakala zilizopakuliwa awali zinaweza kubaki; wasiliana nasi kuhusu nakala hizo.',
       ],
     },
   },
